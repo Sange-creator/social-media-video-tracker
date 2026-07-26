@@ -4,9 +4,15 @@ Local-first iPhone tracker for organizing videos in Google Drive before publishi
 
 It connects only to the Google Drive folders you choose, keeps every video’s history on-device, and helps each account maintain a consistent daily video queue—without automated posting or a backend server.
 
-## Screenshot
+## App preview
 
-![Onboarding](docs/screenshots/onboarding.png)
+<p align="center">
+  <img src="docs/screenshots/connect.png" alt="Connect Google Drive" width="30%" />
+  <img src="docs/screenshots/today.png" alt="Today schedule and suggestions" width="30%" />
+  <img src="docs/screenshots/library.png" alt="Account library and history" width="30%" />
+</p>
+
+<p align="center"><sub>Connect folders · Plan daily downloads · Track every account</sub></p>
 
 ## What it does
 
