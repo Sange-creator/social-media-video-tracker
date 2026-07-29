@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 struct TrackerBackup: Codable {
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 6
 
     let schemaVersion: Int
     let revision: Int
@@ -11,11 +11,16 @@ struct TrackerBackup: Codable {
     let rootFolderID: String
     let rootResourceKey: String?
     let googleUserID: String
+    let globalCopyQueueLink: String?
+    let globalCopyQueueSheetID: String?
+    let globalCopyQueueResourceKey: String?
     let sources: [SourceRecord]?
     let accounts: [AccountRecord]
     let videos: [VideoRecord]
     let assignments: [AssignmentRecord]
     let events: [EventRecord]
+    let copyEntries: [CopyEntryRecord]?
+    let copyEvents: [CopyEventRecord]?
 
     struct SourceRecord: Codable {
         let id: UUID
@@ -47,6 +52,11 @@ struct TrackerBackup: Codable {
         let isConfigured: Bool?
         let iconSymbol: String?
         let iconColorHex: String?
+        let copyQueueFolderID: String?
+        let copyQueueSheetID: String?
+        let copyQueueSheetResourceKey: String?
+        let copyQueueLastSyncedAt: Date?
+        let copyQueueIssue: String?
     }
 
     struct VideoRecord: Codable {
@@ -67,6 +77,7 @@ struct TrackerBackup: Codable {
         let canDownload: Bool
         let downloadedAt: Date?
         let uploadedAt: Date?
+        let photoLocalIdentifier: String?
         let isMissingFromPhotos: Bool?
         let createdAt: Date
         let updatedAt: Date
@@ -93,6 +104,34 @@ struct TrackerBackup: Codable {
         let accountName: String
         let driveFileID: String
         let videoName: String
+    }
+
+    struct CopyEntryRecord: Codable {
+        let identityKey: String
+        let accountID: UUID?
+        let googleUserID: String
+        let accountFolderID: String
+        let sourceSheetID: String
+        let contentHash: String
+        let sourceRow: Int
+        let content: String
+        let driveModifiedAt: Date?
+        let lastSeenAt: Date
+        let isMissingFromDrive: Bool
+        let copiedAt: Date?
+        let copyCount: Int
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
+    struct CopyEventRecord: Codable {
+        let id: UUID
+        let entryIdentityKey: String
+        let kindRawValue: String
+        let timestamp: Date
+        let detail: String?
+        let accountName: String
+        let contentPreview: String
     }
 }
 
@@ -134,9 +173,12 @@ final class BackupService {
         rootLink: String,
         rootFolderID: String,
         rootResourceKey: String?,
-        googleUserID: String
+        googleUserID: String,
+        globalCopyQueueLink: String = "",
+        globalCopyQueueSheetID: String = "",
+        globalCopyQueueResourceKey: String? = nil
     ) async throws {
-        guard !rootFolderID.isEmpty else { return }
+        guard !rootFolderID.isEmpty || !globalCopyQueueSheetID.isEmpty else { return }
         let currentRevision = defaults.integer(forKey: "backupRevision") + 1
         let backup = try makeBackup(
             revision: currentRevision,
@@ -144,7 +186,10 @@ final class BackupService {
             rootLink: rootLink,
             rootFolderID: rootFolderID,
             rootResourceKey: rootResourceKey,
-            googleUserID: googleUserID
+            googleUserID: googleUserID,
+            globalCopyQueueLink: globalCopyQueueLink,
+            globalCopyQueueSheetID: globalCopyQueueSheetID,
+            globalCopyQueueResourceKey: globalCopyQueueResourceKey
         )
         let data = try encoder.encode(backup)
         if let existing = try await api.listAppDataFile(named: Self.fileName) {
@@ -161,7 +206,16 @@ final class BackupService {
         context: ModelContext,
         expectedGoogleUserID: String
     ) async throws -> TrackerBackup? {
-        guard try context.fetchCount(FetchDescriptor<TikTokAccount>()) == 0 else {
+        let localAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+        let localSources = try context.fetch(FetchDescriptor<DriveSource>())
+        let localVideos = try context.fetch(FetchDescriptor<VideoAsset>())
+        let localCopyEntries = try context.fetch(FetchDescriptor<CopyEntry>())
+        let hasLocalDataForUser =
+            localAccounts.contains { $0.googleUserID == expectedGoogleUserID } ||
+            localSources.contains { $0.googleUserID == expectedGoogleUserID } ||
+            localVideos.contains { $0.googleUserID == expectedGoogleUserID } ||
+            localCopyEntries.contains { $0.googleUserID == expectedGoogleUserID }
+        guard !hasLocalDataForUser else {
             return nil
         }
         guard let file = try await api.listAppDataFile(named: Self.fileName) else {
@@ -203,7 +257,10 @@ final class BackupService {
         rootLink: String,
         rootFolderID: String,
         rootResourceKey: String?,
-        googleUserID: String
+        googleUserID: String,
+        globalCopyQueueLink: String = "",
+        globalCopyQueueSheetID: String = "",
+        globalCopyQueueResourceKey: String? = nil
     ) throws -> TrackerBackup {
         let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
             .filter { $0.googleUserID == googleUserID }
@@ -217,6 +274,11 @@ final class BackupService {
             .filter { videoKeys.contains($0.video?.identityKey ?? "") }
         let events = try context.fetch(FetchDescriptor<StatusEvent>())
             .filter { videoKeys.contains($0.video?.identityKey ?? "") }
+        let copyEntries = try context.fetch(FetchDescriptor<CopyEntry>())
+            .filter { $0.googleUserID == googleUserID }
+        let copyEntryKeys = Set(copyEntries.map(\.identityKey))
+        let copyEvents = try context.fetch(FetchDescriptor<CopyEvent>())
+            .filter { copyEntryKeys.contains($0.entry?.identityKey ?? "") }
 
         return TrackerBackup(
             schemaVersion: TrackerBackup.currentSchemaVersion,
@@ -226,6 +288,9 @@ final class BackupService {
             rootFolderID: rootFolderID,
             rootResourceKey: rootResourceKey,
             googleUserID: googleUserID,
+            globalCopyQueueLink: globalCopyQueueLink,
+            globalCopyQueueSheetID: globalCopyQueueSheetID,
+            globalCopyQueueResourceKey: globalCopyQueueResourceKey,
             sources: sources.map {
                 .init(
                     id: $0.id,
@@ -257,7 +322,12 @@ final class BackupService {
                     googleEmail: $0.googleEmail,
                     isConfigured: $0.isConfigured,
                     iconSymbol: $0.iconSymbol,
-                    iconColorHex: $0.iconColorHex
+                    iconColorHex: $0.iconColorHex,
+                    copyQueueFolderID: $0.copyQueueFolderID,
+                    copyQueueSheetID: $0.copyQueueSheetID,
+                    copyQueueSheetResourceKey: $0.copyQueueSheetResourceKey,
+                    copyQueueLastSyncedAt: $0.copyQueueLastSyncedAt,
+                    copyQueueIssue: $0.copyQueueIssue
                 )
             },
             videos: videos.compactMap { video in
@@ -280,6 +350,7 @@ final class BackupService {
                     canDownload: video.canDownload,
                     downloadedAt: video.downloadedAt,
                     uploadedAt: video.uploadedAt,
+                    photoLocalIdentifier: video.photoLocalIdentifier,
                     isMissingFromPhotos: video.isMissingFromPhotos,
                     createdAt: video.createdAt,
                     updatedAt: video.updatedAt
@@ -313,6 +384,37 @@ final class BackupService {
                     accountName: event.accountName,
                     driveFileID: event.driveFileID,
                     videoName: event.videoName
+                )
+            },
+            copyEntries: copyEntries.map { entry in
+                return .init(
+                    identityKey: entry.identityKey,
+                    accountID: entry.account?.id,
+                    googleUserID: entry.googleUserID,
+                    accountFolderID: entry.accountFolderID,
+                    sourceSheetID: entry.sourceSheetID,
+                    contentHash: entry.contentHash,
+                    sourceRow: entry.sourceRow,
+                    content: entry.content,
+                    driveModifiedAt: entry.driveModifiedAt,
+                    lastSeenAt: entry.lastSeenAt,
+                    isMissingFromDrive: entry.isMissingFromDrive,
+                    copiedAt: entry.copiedAt,
+                    copyCount: entry.copyCount,
+                    createdAt: entry.createdAt,
+                    updatedAt: entry.updatedAt
+                )
+            },
+            copyEvents: copyEvents.compactMap { event in
+                guard let entryKey = event.entry?.identityKey else { return nil }
+                return .init(
+                    id: event.id,
+                    entryIdentityKey: entryKey,
+                    kindRawValue: event.kindRawValue,
+                    timestamp: event.timestamp,
+                    detail: event.detail,
+                    accountName: event.accountName,
+                    contentPreview: event.contentPreview
                 )
             }
         )
@@ -356,6 +458,11 @@ final class BackupService {
             account.createdAt = record.createdAt
             account.updatedAt = record.updatedAt
             account.isMissingFromDrive = record.isMissingFromDrive
+            account.copyQueueFolderID = record.copyQueueFolderID
+            account.copyQueueSheetID = record.copyQueueSheetID
+            account.copyQueueSheetResourceKey = record.copyQueueSheetResourceKey
+            account.copyQueueLastSyncedAt = record.copyQueueLastSyncedAt
+            account.copyQueueIssue = record.copyQueueIssue
             context.insert(account)
             accountByID[record.id] = account
         }
@@ -382,6 +489,7 @@ final class BackupService {
             video.isMissingFromDrive = record.isMissingFromDrive
             video.downloadedAt = record.downloadedAt
             video.uploadedAt = record.uploadedAt
+            video.photoLocalIdentifier = record.photoLocalIdentifier
             video.isMissingFromPhotos = record.isMissingFromPhotos ?? false
             video.createdAt = record.createdAt
             video.updatedAt = record.updatedAt
@@ -421,6 +529,45 @@ final class BackupService {
                 video: video
             )
             context.insert(event)
+        }
+
+        var copyEntryByKey: [String: CopyEntry] = [:]
+        for record in backup.copyEntries ?? [] {
+            let account = record.accountID.flatMap { accountByID[$0] }
+            let entry = CopyEntry(
+                googleUserID: record.googleUserID,
+                accountFolderID: record.accountFolderID,
+                sourceSheetID: record.sourceSheetID,
+                contentHash: record.contentHash,
+                sourceRow: record.sourceRow,
+                content: record.content,
+                driveModifiedAt: record.driveModifiedAt,
+                account: account
+            )
+            entry.lastSeenAt = record.lastSeenAt
+            entry.isMissingFromDrive = record.isMissingFromDrive
+            entry.copiedAt = record.copiedAt
+            entry.copyCount = record.copyCount
+            entry.createdAt = record.createdAt
+            entry.updatedAt = record.updatedAt
+            context.insert(entry)
+            copyEntryByKey[record.identityKey] = entry
+        }
+
+        for record in backup.copyEvents ?? [] {
+            guard let entry = copyEntryByKey[record.entryIdentityKey] else { continue }
+            context.insert(
+                CopyEvent(
+                    id: record.id,
+                    kind: CopyEventKind(rawValue: record.kindRawValue) ?? .copied,
+                    timestamp: record.timestamp,
+                    detail: record.detail,
+                    accountName: record.accountName,
+                    entryIdentityKey: entry.identityKey,
+                    contentPreview: record.contentPreview,
+                    entry: entry
+                )
+            )
         }
         try context.save()
     }

@@ -67,7 +67,7 @@ struct OnboardingView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 9))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("REAL GOOGLE DRIVE · BUILD 18")
+                    Text("REAL GOOGLE DRIVE · BUILD \(appBuildNumber)")
                         .font(.caption2.weight(.bold))
                         .tracking(1.5)
                         .foregroundStyle(TrackerPalette.accent)
@@ -85,6 +85,10 @@ struct OnboardingView: View {
                 .foregroundStyle(TrackerPalette.muted)
                 .lineSpacing(3)
         }
+    }
+
+    private var appBuildNumber: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
     }
 
     private var setupProgress: some View {

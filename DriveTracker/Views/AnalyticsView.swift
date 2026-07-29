@@ -3,11 +3,33 @@ import SwiftData
 import SwiftUI
 
 struct AnalyticsView: View {
+    @EnvironmentObject private var state: AppState
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
     @Query private var videos: [VideoAsset]
     @Query(sort: \StatusEvent.timestamp, order: .reverse) private var events: [StatusEvent]
+    @Query private var copyEntries: [CopyEntry]
+    @Query(sort: \CopyEvent.timestamp, order: .reverse) private var copyEvents: [CopyEvent]
 
     private let calendar = Calendar.autoupdatingCurrent
+
+    private var activeAccounts: [TikTokAccount] {
+        accounts.filter { $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }
+    }
+
+    private var dailyTarget: Int {
+        activeAccounts.reduce(0) { $0 + $1.dailyQuota }
+    }
+
+    private var completedToday: Int {
+        activeAccounts.lazy.flatMap(\.videos).filter {
+            guard let completedAt = $0.uploadedAt else { return false }
+            return calendar.isDateInToday(completedAt)
+        }.count
+    }
+
+    private var dailyProgress: Double {
+        dailyTarget > 0 ? Double(completedToday) / Double(dailyTarget) : 0
+    }
 
     private var downloadedVideos: [VideoAsset] {
         videos.filter { $0.downloadedAt != nil }
@@ -93,6 +115,27 @@ struct AnalyticsView: View {
             .map { $0 }
     }
 
+    private var copyActions: [CopyEvent] {
+        copyEvents.filter {
+            ($0.kind == .copied || $0.kind == .recopied) &&
+            $0.entry?.googleUserID == state.auth.userID
+        }
+    }
+
+    private var copyActionsToday: Int {
+        copyActions.filter { calendar.isDateInToday($0.timestamp) }.count
+    }
+
+    private var activeUncopiedEntries: Int {
+        currentUserCopyEntries.filter {
+            !$0.isMissingFromDrive && $0.copiedAt == nil
+        }.count
+    }
+
+    private var currentUserCopyEntries: [CopyEntry] {
+        copyEntries.filter { $0.googleUserID == state.auth.userID }
+    }
+
     private var startOfToday: Date {
         calendar.startOfDay(for: .now)
     }
@@ -101,10 +144,12 @@ struct AnalyticsView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
+                    dailyTrackerCard
                     overviewGrid
                     trendCard
                     accountBreakdown
                     trackingInsights
+                    copyQueueInsights
                     recentActivity
                 }
                 .padding(.horizontal, 16)
@@ -114,6 +159,71 @@ struct AnalyticsView: View {
             .navigationTitle("Analytics")
             .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
+        }
+    }
+
+    private var dailyTrackerCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            TrackerSectionLabel(
+                title: "Daily tracker",
+                trailing: Date.now.formatted(.dateTime.month(.abbreviated).day())
+            )
+
+            HStack(alignment: .top) {
+                TrackerMetric(
+                    value: "\(completedToday)/\(dailyTarget)",
+                    label: "Completed today",
+                    tint: dailyProgress >= 1 ? TrackerPalette.success : .white
+                )
+                Spacer()
+                TrackerMetric(
+                    value: "\(activeAccounts.count)",
+                    label: "Active accounts",
+                    tint: TrackerPalette.warning
+                )
+                Spacer()
+                TrackerMetric(
+                    value: dailyProgress.formatted(
+                        .percent.precision(.fractionLength(0))
+                    ),
+                    label: "Completion",
+                    tint: TrackerPalette.accent
+                )
+            }
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(TrackerPalette.raised)
+                    Rectangle()
+                        .fill(
+                            dailyProgress >= 1
+                                ? TrackerPalette.success
+                                : TrackerPalette.accent
+                        )
+                        .frame(
+                            width: geometry.size.width * min(max(dailyProgress, 0), 1)
+                        )
+                }
+            }
+            .frame(height: 4)
+
+            HStack {
+                Text("\(todayCount) downloaded today")
+                Spacer()
+                Text("\(max(0, dailyTarget - completedToday)) remaining")
+            }
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(TrackerPalette.muted)
+        }
+        .trackerCard()
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(
+                    dailyProgress >= 1
+                        ? TrackerPalette.success
+                        : TrackerPalette.accent
+                )
+                .frame(height: 2)
         }
     }
 
@@ -270,6 +380,39 @@ struct AnalyticsView: View {
                 detail: "\(missingFromPhotos) missing from Photos",
                 tint: missingFromPhotos > 0 ? TrackerPalette.warning : TrackerPalette.muted
             )
+        }
+        .trackerCard()
+    }
+
+    private var copyQueueInsights: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            TrackerSectionLabel(
+                title: "Copy queue",
+                trailing: "\(activeUncopiedEntries) uncopied"
+            )
+            HStack {
+                TrackerMetric(
+                    value: "\(copyActionsToday)",
+                    label: "Copied today",
+                    tint: TrackerPalette.accent
+                )
+                Spacer()
+                TrackerMetric(
+                    value: "\(copyActions.count)",
+                    label: "All copy actions",
+                    tint: TrackerPalette.success
+                )
+                Spacer()
+                TrackerMetric(
+                    value: "\(currentUserCopyEntries.filter { !$0.isMissingFromDrive }.count)",
+                    label: "Active text",
+                    tint: TrackerPalette.warning
+                )
+            }
+
+            Text("One shared queue is used across all managed accounts.")
+                .font(.caption)
+                .foregroundStyle(TrackerPalette.muted)
         }
         .trackerCard()
     }

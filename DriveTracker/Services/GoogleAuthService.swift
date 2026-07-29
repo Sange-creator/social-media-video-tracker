@@ -58,12 +58,12 @@ final class GoogleAuthService: ObservableObject {
         }
         do {
             let userBox = try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<UnsafeSendableBox<GIDGoogleUser?>, Error>) in
+                (continuation: CheckedContinuation<GoogleUserBox, Error>) in
                 GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
                     if let error {
                         continuation.resume(throwing: error)
                     } else {
-                        continuation.resume(returning: UnsafeSendableBox(user))
+                        continuation.resume(returning: GoogleUserBox(user))
                     }
                 }
             }
@@ -156,10 +156,10 @@ final class GoogleAuthService: ObservableObject {
     }
 }
 
-private final class UnsafeSendableBox<Value>: @unchecked Sendable {
-    nonisolated(unsafe) let value: Value
+private final class GoogleUserBox: @unchecked Sendable {
+    nonisolated(unsafe) let value: GIDGoogleUser?
 
-    nonisolated init(_ value: Value) {
+    nonisolated init(_ value: GIDGoogleUser?) {
         self.value = value
     }
 }

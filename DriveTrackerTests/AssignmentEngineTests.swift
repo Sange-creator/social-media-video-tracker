@@ -9,7 +9,9 @@ final class AssignmentEngineTests: XCTestCase {
             TikTokAccount.self,
             VideoAsset.self,
             DailyAssignment.self,
-            StatusEvent.self
+            StatusEvent.self,
+            CopyEntry.self,
+            CopyEvent.self
         ])
         return try! ModelContainer(
             for: schema,
@@ -102,6 +104,24 @@ final class AssignmentEngineTests: XCTestCase {
 
         XCTAssertNil(video.uploadedAt)
         XCTAssertNotEqual(video.status, .uploaded)
+    }
+
+    func testAvailableVideoCanCompleteDirectDownloadWithoutAssignment() throws {
+        let account = makeAccount(videoCount: 5, quota: 3)
+        let video = try XCTUnwrap(account.videos.first)
+
+        try engine.markDownloadStarted(video, context: context)
+        try engine.completeVerifiedDownload(
+            video,
+            photoIdentifier: "direct-photo",
+            context: context
+        )
+
+        XCTAssertEqual(video.status, .uploaded)
+        XCTAssertEqual(video.photoLocalIdentifier, "direct-photo")
+        XCTAssertTrue(video.assignments.isEmpty)
+        XCTAssertTrue(video.events.contains { $0.kind == .downloadSucceeded })
+        XCTAssertTrue(video.events.contains { $0.kind == .uploadConfirmed })
     }
 
     func testReportsShortageWithoutRepeatingVideos() throws {

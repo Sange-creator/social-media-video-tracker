@@ -25,6 +25,7 @@ struct DriveItem: Decodable, Identifiable, Sendable {
 
     static let folderMimeType = "application/vnd.google-apps.folder"
     static let shortcutMimeType = "application/vnd.google-apps.shortcut"
+    static let spreadsheetMimeType = "application/vnd.google-apps.spreadsheet"
 
     var effectiveID: String {
         shortcutDetails?.targetId ?? id
@@ -44,6 +45,10 @@ struct DriveItem: Decodable, Identifiable, Sendable {
 
     var isVideo: Bool {
         effectiveMimeType.hasPrefix("video/")
+    }
+
+    var isSpreadsheet: Bool {
+        effectiveMimeType == Self.spreadsheetMimeType
     }
 
     var sizeValue: Int64? {
@@ -236,13 +241,32 @@ final class DriveAPIClient {
         }
         let highResolutionLink = link.replacingOccurrences(
             of: "=s\\d+($|-[^?]+)",
-            with: "=s1000$1",
+            with: "=s480$1",
             options: .regularExpression
         )
         guard let url = URL(string: highResolutionLink) else {
             throw DriveAPIError.malformedURL
         }
         return try await data(for: authorizedRequest(url: url))
+    }
+
+    func exportSpreadsheetCSV(
+        id: String,
+        resourceKey: String? = nil
+    ) async throws -> Data {
+        var components = URLComponents(
+            string: "https://www.googleapis.com/drive/v3/files/\(id)/export"
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "mimeType", value: "text/csv")
+        ]
+        guard let url = components?.url else { throw DriveAPIError.malformedURL }
+        return try await data(
+            for: authorizedRequest(
+                url: url,
+                resourceKeys: resourceHeader(id: id, key: resourceKey)
+            )
+        )
     }
 
     func listAppDataFile(named name: String) async throws -> DriveItem? {

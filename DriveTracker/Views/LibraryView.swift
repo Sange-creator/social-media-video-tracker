@@ -105,6 +105,8 @@ private struct LibraryAccountRow: View {
 }
 
 private struct AccountLibraryView: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var state: AppState
     let account: TikTokAccount
     @State private var search = ""
     @State private var selectedStatus: VideoStatus?
@@ -145,30 +147,8 @@ private struct AccountLibraryView: View {
                     .padding(.top, 44)
                 } else {
                     ForEach(filteredVideos) { video in
-                        HStack(spacing: 8) {
-                            Button {
-                                previewVideo = video
-                            } label: {
-                                LibraryVideoRow(video: video, showsChevron: false)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(video.isMissingFromDrive || !video.canDownload)
-
-                            NavigationLink {
-                                VideoDetailView(video: video)
-                            } label: {
-                                Image(systemName: "info.circle")
-                                    .font(.title3.weight(.semibold))
-                                    .foregroundStyle(TrackerPalette.muted)
-                                    .frame(width: 42, height: 52)
-                                    .background(TrackerPalette.surface)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 10)
-                                            .stroke(TrackerPalette.line, lineWidth: 1)
-                                    }
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                            }
-                            .buttonStyle(.plain)
+                        LibraryVideoCard(video: video) {
+                            previewVideo = video
                         }
                     }
                 }
@@ -184,6 +164,9 @@ private struct AccountLibraryView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .sheet(item: $previewVideo) { video in
             VideoPreviewView(video: video)
+        }
+        .refreshable {
+            await state.sync(context: context, announce: false)
         }
     }
 
@@ -212,63 +195,124 @@ private struct AccountLibraryView: View {
     }
 }
 
-private struct LibraryVideoRow: View {
+private struct LibraryVideoCard: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var state: AppState
     let video: VideoAsset
-    var showsChevron = true
+    let preview: () -> Void
+
+    private var isDownloading: Bool {
+        state.downloadIdentity == video.identityKey
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            VideoThumbnailView(
-                video: video,
-                width: 82,
-                height: 110
-            )
+        VStack(spacing: 0) {
+            Button(action: preview) {
+                HStack(spacing: 12) {
+                    VideoThumbnailView(
+                        video: video,
+                        width: 82,
+                        height: 110
+                    )
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text(video.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                HStack(spacing: 9) {
-                    Text(video.account?.displayName ?? "Unknown account")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(TrackerPalette.muted)
-                    StatusPill(status: video.status)
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(video.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+
+                        StatusPill(status: video.status)
+
+                        if !video.folderPath.isEmpty {
+                            Label(video.folderPath, systemImage: "folder")
+                                .font(.caption2)
+                                .foregroundStyle(TrackerPalette.muted)
+                                .lineLimit(2)
+                        }
+                    }
+
+                    Spacer(minLength: 6)
+
+                    VStack(spacing: 9) {
+                        if video.isMissingFromDrive {
+                            Image(systemName: "icloud.slash")
+                                .foregroundStyle(TrackerPalette.danger)
+                                .accessibilityLabel("Missing from Drive")
+                        }
+                        if video.isMissingFromPhotos {
+                            Image(systemName: "photo.badge.exclamationmark")
+                                .foregroundStyle(TrackerPalette.warning)
+                                .accessibilityLabel("Deleted from Photos")
+                        }
+                    }
                 }
-                if !video.folderPath.isEmpty {
-                    Label(video.folderPath, systemImage: "folder")
-                        .font(.caption2)
-                        .foregroundStyle(TrackerPalette.muted)
-                        .lineLimit(1)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(video.isMissingFromDrive || !video.canDownload)
+
+            Divider().overlay(TrackerPalette.line)
+
+            HStack(spacing: 0) {
+                if video.status == .available || video.status == .assigned {
+                    Button {
+                        if isDownloading {
+                            state.cancelDownload(video)
+                        } else {
+                            Task { await state.download(video, context: context) }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            if isDownloading {
+                                ProgressView()
+                                    .tint(TrackerPalette.warning)
+                            } else {
+                                Image(systemName: "arrow.down.to.line")
+                            }
+                            Text(isDownloading ? "Cancel" : "Download")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(
+                            isDownloading
+                                ? TrackerPalette.warning
+                                : TrackerPalette.accent
+                        )
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(
+                        (!isDownloading && state.downloadIdentity != nil) ||
+                        video.isMissingFromDrive ||
+                        !video.canDownload
+                    )
+
+                    Divider()
+                        .overlay(TrackerPalette.line)
+                        .frame(height: 24)
                 }
-            }
 
-            Spacer(minLength: 8)
-
-            if video.isMissingFromDrive {
-                Image(systemName: "icloud.slash")
-                    .foregroundStyle(TrackerPalette.danger)
-                    .accessibilityLabel("Missing from Drive")
-            }
-            if video.isMissingFromPhotos {
-                Image(systemName: "photo.badge.exclamationmark")
-                    .foregroundStyle(TrackerPalette.warning)
-                    .accessibilityLabel("Deleted from Photos")
-            }
-            if showsChevron {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(TrackerPalette.muted)
+                NavigationLink {
+                    VideoDetailView(video: video)
+                } label: {
+                    Label("Details", systemImage: "info.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TrackerPalette.muted)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(TrackerPalette.surface)
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(TrackerPalette.line, lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -284,133 +328,15 @@ struct VideoDetailView: View {
     }
 
     var body: some View {
-        List {
-            Section {
-                Button {
-                    showPreview = true
-                } label: {
-                    Label("Preview video", systemImage: "play.fill")
-                        .font(.headline)
-                }
-                .disabled(video.isMissingFromDrive || !video.canDownload)
-            } header: {
-                TrackerSectionLabel(title: "Video preview")
-            } footer: {
-                Text("Preview streams a temporary copy from Drive. It does not mark the video as downloaded.")
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                videoCard
+                historyCard
             }
-
-            Section {
-                LabeledContent("Account", value: video.account?.displayName ?? "Unknown")
-                LabeledContent("Folder", value: video.folderPath.isEmpty ? (video.account?.folderName ?? "Unknown") : video.folderPath)
-                LabeledContent("State") { StatusPill(status: video.status) }
-                LabeledContent("Drive file ID") {
-                    Text(video.driveFileID)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(TrackerPalette.muted)
-                }
-                if let downloadedAt = video.downloadedAt {
-                    LabeledContent("Downloaded", value: downloadedAt.formatted())
-                }
-                if let uploadedAt = video.uploadedAt {
-                    LabeledContent("Completed", value: uploadedAt.formatted())
-                }
-                if video.isMissingFromDrive {
-                    Label("Deleted or moved out of the tracked Drive folder", systemImage: "icloud.slash")
-                        .foregroundStyle(TrackerPalette.danger)
-                }
-                if video.isMissingFromPhotos {
-                    Label("Saved copy is no longer in Photos", systemImage: "photo.badge.exclamationmark")
-                        .foregroundStyle(TrackerPalette.warning)
-                }
-            } header: {
-                TrackerSectionLabel(title: "File status")
-            }
-
-            Section {
-                if video.status == .available {
-                    Button {
-                        state.selectManually(video, context: context)
-                    } label: {
-                        Label("Add to today’s queue", systemImage: "calendar.badge.plus")
-                    }
-                    .disabled(video.isMissingFromDrive || !video.canDownload)
-                    Button {
-                        state.markCompletedOutsideApp(video, context: context)
-                    } label: {
-                        Label("Already downloaded — Mark completed", systemImage: "checkmark.circle.fill")
-                    }
-                }
-                if video.status == .assigned {
-                    Button {
-                        Task { await state.download(video, context: context) }
-                    } label: {
-                        Label("Download to Photos", systemImage: "arrow.down.to.line")
-                    }
-                    Button {
-                        state.markCompletedOutsideApp(video, context: context)
-                    } label: {
-                        Label("Already downloaded — Mark completed", systemImage: "checkmark.circle.fill")
-                    }
-                }
-                if video.status == .downloaded {
-                    Label("Completing automatically…", systemImage: "checkmark.circle")
-                        .foregroundStyle(TrackerPalette.accent)
-                }
-                if video.status == .uploaded {
-                    Button {
-                        Task { await state.redownload(video, context: context) }
-                    } label: {
-                        Label("Download another copy", systemImage: "arrow.clockwise")
-                    }
-                    Button("Undo completed status", role: .destructive) {
-                        state.undoUpload(video, context: context)
-                    }
-                }
-                if video.downloadedAt != nil {
-                    Button {
-                        state.verifyPhotoCopy(video, context: context)
-                    } label: {
-                        Label("Verify saved Photos copy", systemImage: "photo.badge.checkmark")
-                    }
-                }
-            } header: {
-                TrackerSectionLabel(title: "Available actions")
-            } footer: {
-                if video.status == .available {
-                    Text("Manual selection replaces an untouched suggestion when the account’s daily list is already full. Completed videos are never suggested again.")
-                }
-            }
-
-            Section {
-                if sortedEvents.isEmpty {
-                    Text("No status changes yet.")
-                        .foregroundStyle(TrackerPalette.muted)
-                }
-                ForEach(sortedEvents) { event in
-                    HStack(alignment: .top, spacing: 12) {
-                        Circle()
-                            .fill(TrackerPalette.accent)
-                            .frame(width: 7, height: 7)
-                            .padding(.top, 6)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(event.kind.title)
-                                .font(.subheadline.weight(.semibold))
-                            Text(event.timestamp.formatted())
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(TrackerPalette.muted)
-                            if let detail = event.detail {
-                                Text(detail)
-                                    .font(.caption)
-                                    .foregroundStyle(TrackerPalette.muted)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                TrackerSectionLabel(title: "Audit history")
-            }
+            .padding(16)
+            .padding(.bottom, 104)
         }
-        .trackerListStyle()
+        .trackerScreen()
         .navigationTitle(video.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
@@ -429,6 +355,227 @@ struct VideoDetailView: View {
         .sheet(isPresented: $showPreview) {
             VideoPreviewView(video: video)
         }
+    }
+
+    private var videoCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            TrackerSectionLabel(title: "Video details")
+
+            Button {
+                showPreview = true
+            } label: {
+                VideoThumbnailView(
+                    video: video,
+                    width: 190,
+                    height: 254
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .disabled(video.isMissingFromDrive || !video.canDownload)
+
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(TrackerPalette.muted)
+                Text("Preview streams the video from Drive and does not mark it completed.")
+                    .font(.caption)
+                    .foregroundStyle(TrackerPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider().overlay(TrackerPalette.line)
+
+            VStack(spacing: 12) {
+                LabeledContent("Account", value: video.account?.displayName ?? "Unknown")
+                LabeledContent(
+                    "Folder",
+                    value: video.folderPath.isEmpty
+                        ? (video.account?.folderName ?? "Unknown")
+                        : video.folderPath
+                )
+                LabeledContent("State") {
+                    StatusPill(status: video.status)
+                }
+                LabeledContent("Drive file ID") {
+                    Text(video.driveFileID)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(TrackerPalette.muted)
+                        .lineLimit(1)
+                }
+                if let downloadedAt = video.downloadedAt {
+                    LabeledContent("Downloaded", value: downloadedAt.formatted())
+                }
+                if let uploadedAt = video.uploadedAt {
+                    LabeledContent("Completed", value: uploadedAt.formatted())
+                }
+            }
+            .font(.subheadline)
+
+            if video.isMissingFromDrive {
+                Label(
+                    "Deleted or moved out of the tracked Drive folder",
+                    systemImage: "icloud.slash"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(TrackerPalette.danger)
+            }
+            if video.isMissingFromPhotos {
+                Label(
+                    "Saved copy is no longer in Photos",
+                    systemImage: "photo.badge.exclamationmark"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(TrackerPalette.warning)
+            }
+
+            Divider().overlay(TrackerPalette.line)
+
+            TrackerSectionLabel(title: "Actions")
+            actionButtons
+
+            if video.status == .available {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(TrackerPalette.warning)
+                    Text("Adding this video to Today may replace an untouched suggestion when the account list is full. Completed videos are never suggested again.")
+                        .font(.caption)
+                        .foregroundStyle(TrackerPalette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .trackerCard(padding: 16)
+    }
+
+    @ViewBuilder
+    private var actionButtons: some View {
+        if video.status == .available || video.status == .assigned {
+            if state.downloadIdentity == video.identityKey {
+                Button {
+                    state.cancelDownload(video)
+                } label: {
+                    Label("Cancel download", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            } else {
+                Button {
+                    Task { await state.download(video, context: context) }
+                } label: {
+                    Label("Download to Photos", systemImage: "arrow.down.to.line")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                .disabled(
+                    state.downloadIdentity != nil ||
+                    video.isMissingFromDrive ||
+                    !video.canDownload
+                )
+            }
+        }
+
+        if video.status == .available {
+            Button {
+                state.selectManually(video, context: context)
+            } label: {
+                Label("Add to today’s queue", systemImage: "calendar.badge.plus")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            .disabled(video.isMissingFromDrive || !video.canDownload)
+        }
+
+        if video.status == .available || video.status == .assigned {
+            Button {
+                state.markCompletedOutsideApp(video, context: context)
+            } label: {
+                Label(
+                    "Already downloaded — Mark completed",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+        }
+
+        if video.status == .downloaded {
+            Label("Completing automatically…", systemImage: "checkmark.circle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(TrackerPalette.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if video.status == .uploaded {
+            Button {
+                Task { await state.redownload(video, context: context) }
+            } label: {
+                Label("Download another copy", systemImage: "arrow.clockwise")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+
+            Button {
+                state.undoUpload(video, context: context)
+            } label: {
+                Label("Undo completed status", systemImage: "arrow.uturn.backward")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+        }
+
+        if video.downloadedAt != nil {
+            Button {
+                state.verifyPhotoCopy(video, context: context)
+            } label: {
+                Label("Verify saved Photos copy", systemImage: "photo.badge.checkmark")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+        }
+    }
+
+    private var historyCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            TrackerSectionLabel(
+                title: "Audit history",
+                trailing: "\(sortedEvents.count) events"
+            )
+
+            if sortedEvents.isEmpty {
+                Text("No status changes yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(TrackerPalette.muted)
+            } else {
+                ForEach(Array(sortedEvents.enumerated()), id: \.element.id) {
+                    index,
+                    event in
+                    HStack(alignment: .top, spacing: 12) {
+                        Circle()
+                            .fill(TrackerPalette.accent)
+                            .frame(width: 7, height: 7)
+                            .padding(.top, 6)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(event.kind.title)
+                                .font(.subheadline.weight(.semibold))
+                            Text(event.timestamp.formatted())
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(TrackerPalette.muted)
+                            if let detail = event.detail {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(TrackerPalette.muted)
+                            }
+                        }
+                    }
+                    if index < sortedEvents.count - 1 {
+                        Divider()
+                            .overlay(TrackerPalette.line)
+                            .padding(.leading, 19)
+                    }
+                }
+            }
+        }
+        .trackerCard(padding: 16)
     }
 }
 

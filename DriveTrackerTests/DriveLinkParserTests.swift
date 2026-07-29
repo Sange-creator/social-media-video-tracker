@@ -35,4 +35,30 @@ final class DriveLinkParserTests: XCTestCase {
     func testRejectsBlankInput() {
         XCTAssertThrowsError(try parser.parse("  "))
     }
+
+    func testParsesGoogleSheetLink() throws {
+        let reference = try GoogleSheetLinkParser().parse(
+            "https://docs.google.com/spreadsheets/d/1SheetAbCdEfGhIjKlMn/edit#gid=0"
+        )
+
+        XCTAssertEqual(reference.fileID, "1SheetAbCdEfGhIjKlMn")
+        XCTAssertNil(reference.resourceKey)
+    }
+
+    func testParsesGoogleDriveFileLinkAndResourceKey() throws {
+        let reference = try GoogleSheetLinkParser().parse(
+            "https://drive.google.com/file/d/1SheetAbCdEfGhIjKlMn/view?resourcekey=queue-key"
+        )
+
+        XCTAssertEqual(reference.fileID, "1SheetAbCdEfGhIjKlMn")
+        XCTAssertEqual(reference.resourceKey, "queue-key")
+    }
+
+    func testRejectsNonGoogleSheetHost() {
+        XCTAssertThrowsError(
+            try GoogleSheetLinkParser().parse(
+                "https://example.com/spreadsheets/d/1SheetAbCdEfGhIjKlMn"
+            )
+        )
+    }
 }

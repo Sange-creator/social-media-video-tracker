@@ -70,7 +70,7 @@ final class DownloadNotificationService {
                 ) else { continue }
 
                 let content = UNMutableNotificationContent()
-                content.title = "Please upload this video"
+                content.title = "Download reminder"
                 content.body = "\(account.displayName) • \(video.name)"
                 content.sound = .default
                 content.userInfo = [

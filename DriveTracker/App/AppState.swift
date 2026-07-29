@@ -15,9 +15,23 @@ final class AppState: ObservableObject {
     @Published var isWorking = false
     @Published var statusMessage: String?
     @Published var errorMessage: String?
+    @Published var toastMessage: String?
     @Published var lastSyncAt: Date?
     @Published var downloadIdentity: String?
     @Published private(set) var reminderTimeZoneID: String
+    @Published private(set) var globalCopyQueueLastSyncedAt: Date? {
+        didSet { defaults.set(globalCopyQueueLastSyncedAt, forKey: Keys.globalCopyQueueLastSyncedAt) }
+    }
+    @Published private(set) var globalCopyQueueIssue: String?
+    @Published private(set) var globalCopyQueueLink: String {
+        didSet { defaults.set(globalCopyQueueLink, forKey: Keys.globalCopyQueueLink) }
+    }
+    @Published private(set) var globalCopyQueueSheetID: String {
+        didSet { defaults.set(globalCopyQueueSheetID, forKey: Keys.globalCopyQueueSheetID) }
+    }
+    @Published private(set) var globalCopyQueueResourceKey: String? {
+        didSet { defaults.set(globalCopyQueueResourceKey, forKey: Keys.globalCopyQueueResourceKey) }
+    }
 
     @Published var rootLink: String {
         didSet { defaults.set(rootLink, forKey: Keys.rootLink) }
@@ -36,11 +50,19 @@ final class AppState: ObservableObject {
     private let defaults: UserDefaults
     private let api: DriveAPIClient
     private let syncService: DriveSyncService
+    private let copyQueueService: CopyQueueService
     private let photoLibrary = PhotoLibraryService()
     private let assignmentEngine = AssignmentEngine()
     private let backupService: BackupService
     private let thumbnailCache = NSCache<NSString, UIImage>()
     private var backupTask: Task<Void, Never>?
+    private var isBackingUp = false
+    private var backupRequestedWhileRunning = false
+    private var startupMaintenanceTask: Task<Void, Never>?
+    private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
+    private var copyQueueSyncTaskKey: String?
+    private var copyQueueSyncTaskToken: UUID?
+    private var activeCopyQueueGoogleUserID: String?
     private var hasStarted = false
     private var lastAutomaticSyncAttempt: Date?
 
@@ -51,6 +73,7 @@ final class AppState: ObservableObject {
         self.auth = auth
         self.api = api
         self.syncService = DriveSyncService(api: api)
+        self.copyQueueService = CopyQueueService(api: api)
         self.downloads = DownloadCoordinator()
         let notifications = DownloadNotificationService(defaults: defaults)
         self.notifications = notifications
@@ -60,10 +83,20 @@ final class AppState: ObservableObject {
         self.rootFolderID = defaults.string(forKey: Keys.rootFolderID) ?? ""
         self.rootResourceKey = defaults.string(forKey: Keys.rootResourceKey)
         self.lastSyncAt = defaults.object(forKey: Keys.lastSyncAt) as? Date
+        self.globalCopyQueueLink = (defaults.string(forKey: Keys.globalCopyQueueLink) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.globalCopyQueueSheetID = defaults.string(forKey: Keys.globalCopyQueueSheetID) ?? ""
+        self.globalCopyQueueResourceKey = defaults.string(forKey: Keys.globalCopyQueueResourceKey)
+        self.globalCopyQueueLastSyncedAt =
+            defaults.object(forKey: Keys.globalCopyQueueLastSyncedAt) as? Date
+        self.thumbnailCache.countLimit = 60
+        self.thumbnailCache.totalCostLimit = 48 * 1_024 * 1_024
+        defaults.set(self.globalCopyQueueLink, forKey: Keys.globalCopyQueueLink)
     }
 
     var hasRootFolder: Bool { !rootFolderID.isEmpty }
     var lastBackupAt: Date? { backupService.lastBackupAt }
+    var hasGlobalCopyQueueSheet: Bool { !globalCopyQueueSheetID.isEmpty }
 
     func start(context: ModelContext) async {
         guard !hasStarted else { return }
@@ -80,6 +113,9 @@ final class AppState: ObservableObject {
             }
         }
         await auth.restore()
+        if let userID = auth.userID {
+            activateCopyQueueConfiguration(for: userID)
+        }
         if !defaults.bool(forKey: Keys.requestedResetVerified) {
             guard deleteLocalData(context: context) else { return }
             if auth.isSignedIn {
@@ -95,7 +131,6 @@ final class AppState: ObservableObject {
             statusMessage = "Tracker setup cleared. Google remains connected; configure your accounts and folders again."
             return
         }
-        verifyKnownPhotoCopies(context: context)
         guard auth.isSignedIn, let userID = auth.userID else { return }
         do {
             if !defaults.bool(forKey: Keys.suppressAutomaticRestore),
@@ -106,14 +141,15 @@ final class AppState: ObservableObject {
                 rootLink = backup.rootLink
                 rootFolderID = backup.rootFolderID
                 rootResourceKey = backup.rootResourceKey
+                applyCopyQueueConfiguration(from: backup)
                 statusMessage = "Tracking history restored from Drive."
             }
-            let hasSources = try context.fetchCount(FetchDescriptor<DriveSource>()) > 0
-            if hasSources {
-                await sync(context: context, announce: false)
-            } else {
-                try ensureToday(context: context)
-            }
+            let hasSources = try activateDriveSourceConfiguration(
+                for: userID,
+                context: context
+            )
+            try ensureToday(context: context)
+            if hasSources { scheduleStartupMaintenance(context: context) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -123,6 +159,7 @@ final class AppState: ObservableObject {
         await perform {
             try await auth.signIn()
             guard let userID = auth.userID else { throw GoogleAuthError.missingUserID }
+            activateCopyQueueConfiguration(for: userID)
             if !defaults.bool(forKey: Keys.suppressAutomaticRestore),
                let backup = try await backupService.restoreIfLocalStoreIsEmpty(
                 context: context,
@@ -131,8 +168,16 @@ final class AppState: ObservableObject {
                 rootLink = backup.rootLink
                 rootFolderID = backup.rootFolderID
                 rootResourceKey = backup.rootResourceKey
+                applyCopyQueueConfiguration(from: backup)
                 statusMessage = "Tracking history restored from Drive."
-                try ensureToday(context: context)
+            }
+            let hasSources = try activateDriveSourceConfiguration(
+                for: userID,
+                context: context
+            )
+            try ensureToday(context: context)
+            if hasSources {
+                scheduleStartupMaintenance(context: context)
             }
         }
     }
@@ -141,6 +186,7 @@ final class AppState: ObservableObject {
         await perform {
             try await auth.switchAccount(hint: hint)
             guard let userID = auth.userID else { throw GoogleAuthError.missingUserID }
+            activateCopyQueueConfiguration(for: userID)
             if !defaults.bool(forKey: Keys.suppressAutomaticRestore),
                let backup = try await backupService.restoreIfLocalStoreIsEmpty(
                 context: context,
@@ -149,7 +195,15 @@ final class AppState: ObservableObject {
                 rootLink = backup.rootLink
                 rootFolderID = backup.rootFolderID
                 rootResourceKey = backup.rootResourceKey
-                try ensureToday(context: context)
+                applyCopyQueueConfiguration(from: backup)
+            }
+            let hasSources = try activateDriveSourceConfiguration(
+                for: userID,
+                context: context
+            )
+            try ensureToday(context: context)
+            if hasSources {
+                scheduleStartupMaintenance(context: context)
             }
         }
     }
@@ -271,6 +325,19 @@ final class AppState: ObservableObject {
                     newVideoCount += result.newVideos
                 }
             }
+            if hasGlobalCopyQueueSheet {
+                do {
+                    let result = try await syncCopyQueueNow(
+                        googleUserID: userID,
+                        context: context
+                    )
+                    globalCopyQueueLastSyncedAt = result.syncedAt
+                    globalCopyQueueIssue = nil
+                    persistActiveCopyQueueConfiguration()
+                } catch {
+                    globalCopyQueueIssue = error.localizedDescription
+                }
+            }
             setSyncDate()
             lastAutomaticSyncAttempt = .now
             try ensureToday(context: context)
@@ -292,7 +359,7 @@ final class AppState: ObservableObject {
     func refreshFromDriveIfNeeded(context: ModelContext) async {
         guard hasStarted, auth.isSignedIn, !isWorking else { return }
         if let lastAutomaticSyncAttempt,
-           Date.now.timeIntervalSince(lastAutomaticSyncAttempt) < 30 {
+           Date.now.timeIntervalSince(lastAutomaticSyncAttempt) < 300 {
             return
         }
         guard
@@ -347,7 +414,7 @@ final class AppState: ObservableObject {
                 errorMessage = "There are no unused videos available to shuffle into the suggestions."
                 return
             }
-            statusMessage = "(changed) suggestion\(changed == 1 ? "" : "s") shuffled for (account.displayName)."
+            statusMessage = "\(changed) suggestion\(changed == 1 ? "" : "s") shuffled for \(account.displayName)."
             scheduleBackup(context: context)
             Task { await scheduleDownloadNotifications(context: context) }
         } catch {
@@ -388,8 +455,19 @@ final class AppState: ObservableObject {
     }
 
     func download(_ video: VideoAsset, context: ModelContext) async {
+        guard downloadIdentity == nil else {
+            errorMessage = "Another video is already downloading."
+            return
+        }
         downloadIdentity = video.identityKey
+        defer { downloadIdentity = nil }
         do {
+            guard auth.userID == video.googleUserID else {
+                throw DriveAssociationError.wrongGoogleAccount(video.account?.googleEmail)
+            }
+            guard !video.isMissingFromDrive, video.canDownload else {
+                throw DriveAssociationError.videoMissing
+            }
             try assignmentEngine.markDownloadStarted(video, context: context)
             let request = try await api.downloadRequest(for: video)
             let localURL = try await downloads.download(request: request, identity: video.identityKey)
@@ -408,15 +486,169 @@ final class AppState: ObservableObject {
             scheduleBackup(context: context)
             await scheduleDownloadNotifications(context: context)
         } catch {
-            try? assignmentEngine.markDownloadFailed(video, error: error, context: context)
+            if !isCancellation(error) {
+                try? assignmentEngine.markDownloadFailed(video, error: error, context: context)
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelDownload(_ video: VideoAsset) {
+        guard downloadIdentity == video.identityKey else { return }
+        downloads.cancel(identity: video.identityKey)
+    }
+
+    func syncGlobalCopyQueue(
+        context: ModelContext,
+        announceErrors: Bool = true
+    ) async {
+        guard let userID = auth.userID, hasGlobalCopyQueueSheet else { return }
+        do {
+            let result = try await syncCopyQueueNow(
+                googleUserID: userID,
+                context: context
+            )
+            globalCopyQueueLastSyncedAt = result.syncedAt
+            globalCopyQueueIssue = nil
+            persistActiveCopyQueueConfiguration()
+            if result.changed {
+                scheduleBackup(context: context)
+            }
+        } catch {
+            globalCopyQueueIssue = error.localizedDescription
+            if announceErrors, !isCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @discardableResult
+    func connectGlobalCopyQueue(
+        link: String? = nil,
+        context: ModelContext
+    ) async -> Bool {
+        guard let userID = auth.userID else {
+            errorMessage = GoogleAuthError.notSignedIn.localizedDescription
+            return false
+        }
+        do {
+            let cleanLink = (link ?? globalCopyQueueLink)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let reference = try GoogleSheetLinkParser().parse(cleanLink)
+            let syncKey = copyQueueSyncKey(
+                sheetID: reference.fileID,
+                resourceKey: reference.resourceKey,
+                googleUserID: userID
+            )
+            let result = try await serializedCopyQueueSync(key: syncKey) {
+                try await self.copyQueueService.syncGlobal(
+                    sheetID: reference.fileID,
+                    resourceKey: reference.resourceKey,
+                    googleUserID: userID,
+                    context: context
+                )
+            }
+            let configurationChanged =
+                globalCopyQueueLink != cleanLink ||
+                globalCopyQueueSheetID != reference.fileID ||
+                globalCopyQueueResourceKey != reference.resourceKey
+            globalCopyQueueLink = cleanLink
+            globalCopyQueueSheetID = reference.fileID
+            globalCopyQueueResourceKey = reference.resourceKey
+            globalCopyQueueLastSyncedAt = result.syncedAt
+            globalCopyQueueIssue = nil
+            persistActiveCopyQueueConfiguration()
+            toastMessage = result.entriesFound == 0
+                ? "Queue connected — add content in column A"
+                : "Queue connected — \(result.entriesFound) entries ready"
+            if configurationChanged || result.changed {
+                scheduleBackup(context: context)
+            }
+            return true
+        } catch {
+            globalCopyQueueIssue = error.localizedDescription
+            if !isCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return false
+        }
+    }
+
+    func changeGlobalCopyQueue() {
+        globalCopyQueueSheetID = ""
+        globalCopyQueueResourceKey = nil
+        globalCopyQueueIssue = nil
+        globalCopyQueueLastSyncedAt = nil
+        persistActiveCopyQueueConfiguration()
+    }
+
+    func copyToClipboard(_ entry: CopyEntry, context: ModelContext) {
+        let wasCopied = entry.copiedAt != nil
+        let timestamp = Date.now
+        UIPasteboard.general.string = entry.content
+        guard UIPasteboard.general.string == entry.content else {
+            errorMessage = "The text could not be placed on the clipboard. Please try again."
+            return
+        }
+        entry.copiedAt = timestamp
+        entry.copyCount += 1
+        entry.updatedAt = timestamp
+        context.insert(
+            CopyEvent(
+                kind: wasCopied ? .recopied : .copied,
+                timestamp: timestamp,
+                detail: "Copied from Queue row \(entry.sourceRow)",
+                accountName: "Global Copy Queue",
+                entryIdentityKey: entry.identityKey,
+                contentPreview: entry.content,
+                entry: entry
+            )
+        )
+        do {
+            try context.save()
+            toastMessage = wasCopied ? "Copied again" : "Copied to clipboard"
+            scheduleBackup(context: context)
+        } catch {
             errorMessage = error.localizedDescription
         }
-        downloadIdentity = nil
+    }
+
+    func markCopyEntryUncopied(_ entry: CopyEntry, context: ModelContext) {
+        entry.copiedAt = nil
+        entry.updatedAt = .now
+        context.insert(
+            CopyEvent(
+                kind: .markedUncopied,
+                detail: "Returned to the uncopied queue",
+                accountName: "Global Copy Queue",
+                entryIdentityKey: entry.identityKey,
+                contentPreview: entry.content,
+                entry: entry
+            )
+        )
+        do {
+            try context.save()
+            toastMessage = "Returned to uncopied"
+            scheduleBackup(context: context)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func redownload(_ video: VideoAsset, context: ModelContext) async {
+        guard downloadIdentity == nil else {
+            errorMessage = "Another video is already downloading."
+            return
+        }
         downloadIdentity = video.identityKey
+        defer { downloadIdentity = nil }
         do {
+            guard auth.userID == video.googleUserID else {
+                throw DriveAssociationError.wrongGoogleAccount(video.account?.googleEmail)
+            }
+            guard !video.isMissingFromDrive, video.canDownload else {
+                throw DriveAssociationError.videoMissing
+            }
             let request = try await api.downloadRequest(for: video)
             let localURL = try await downloads.download(request: request, identity: video.identityKey)
             defer { try? FileManager.default.removeItem(at: localURL) }
@@ -443,9 +675,10 @@ final class AppState: ObservableObject {
             statusMessage = "\(video.name) was downloaded again."
             scheduleBackup(context: context)
         } catch {
-            errorMessage = error.localizedDescription
+            if !isCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
         }
-        downloadIdentity = nil
     }
 
     func verifyPhotoCopy(_ video: VideoAsset, context: ModelContext) {
@@ -483,7 +716,7 @@ final class AppState: ObservableObject {
     func markCompletedOutsideApp(_ video: VideoAsset, context: ModelContext) {
         do {
             try assignmentEngine.markCompletedOutsideApp(video, context: context)
-            statusMessage = "(video.name) was marked completed."
+            statusMessage = "\(video.name) was marked completed."
             scheduleBackup(context: context)
             Task { await scheduleDownloadNotifications(context: context) }
         } catch {
@@ -540,7 +773,9 @@ final class AppState: ObservableObject {
                 }
             }
             try context.save()
-            if try context.fetchCount(FetchDescriptor<DriveSource>()) == 0 {
+            if let userID = auth.userID {
+                _ = try activateDriveSourceConfiguration(for: userID, context: context)
+            } else if try context.fetchCount(FetchDescriptor<DriveSource>()) == 0 {
                 rootLink = ""
                 rootFolderID = ""
                 rootResourceKey = nil
@@ -587,19 +822,43 @@ final class AppState: ObservableObject {
         else {
             return nil
         }
-        thumbnailCache.setObject(image, forKey: cacheKey, cost: data.count)
+        let imageCost = image.cgImage.map {
+            $0.bytesPerRow * $0.height
+        } ?? data.count
+        thumbnailCache.setObject(image, forKey: cacheKey, cost: imageCost)
         return image
     }
 
     func backupNow(context: ModelContext) async {
         guard auth.isSignedIn, let userID = auth.userID else { return }
+        guard !isBackingUp else {
+            backupRequestedWhileRunning = true
+            backupService.markDirty()
+            return
+        }
+        isBackingUp = true
+        defer {
+            isBackingUp = false
+            if backupRequestedWhileRunning {
+                backupRequestedWhileRunning = false
+                backupService.markDirty()
+                scheduleBackup(context: context)
+            }
+        }
         do {
+            let currentSource = try context.fetch(FetchDescriptor<DriveSource>())
+                .filter { $0.googleUserID == userID && $0.isEnabled }
+                .sorted { $0.createdAt > $1.createdAt }
+                .first
             try await backupService.save(
                 context: context,
-                rootLink: rootLink,
-                rootFolderID: rootFolderID,
-                rootResourceKey: rootResourceKey,
-                googleUserID: userID
+                rootLink: currentSource?.rootLink ?? "",
+                rootFolderID: currentSource?.rootFolderID ?? "",
+                rootResourceKey: currentSource?.rootResourceKey,
+                googleUserID: userID,
+                globalCopyQueueLink: globalCopyQueueLink,
+                globalCopyQueueSheetID: globalCopyQueueSheetID,
+                globalCopyQueueResourceKey: globalCopyQueueResourceKey
             )
             objectWillChange.send()
         } catch {
@@ -634,8 +893,16 @@ final class AppState: ObservableObject {
                 context.delete(event)
             }
             try context.save()
+            for event in try context.fetch(FetchDescriptor<CopyEvent>()) {
+                context.delete(event)
+            }
+            try context.save()
             for assignment in try context.fetch(FetchDescriptor<DailyAssignment>()) {
                 context.delete(assignment)
+            }
+            try context.save()
+            for entry in try context.fetch(FetchDescriptor<CopyEntry>()) {
+                context.delete(entry)
             }
             try context.save()
             for video in try context.fetch(FetchDescriptor<VideoAsset>()) {
@@ -653,6 +920,12 @@ final class AppState: ObservableObject {
             rootLink = ""
             rootFolderID = ""
             rootResourceKey = nil
+            globalCopyQueueLink = ""
+            globalCopyQueueSheetID = ""
+            globalCopyQueueResourceKey = nil
+            globalCopyQueueIssue = nil
+            globalCopyQueueLastSyncedAt = nil
+            clearStoredCopyQueueConfigurations()
             defaults.set(true, forKey: Keys.suppressAutomaticRestore)
             statusMessage = "Local tracking data deleted."
             return true
@@ -702,6 +975,7 @@ final class AppState: ObservableObject {
     func dismissMessages() {
         statusMessage = nil
         errorMessage = nil
+        toastMessage = nil
     }
 
     private func setSyncDate() {
@@ -749,6 +1023,9 @@ final class AppState: ObservableObject {
         let automaticStyle = AccountIconCatalog.style(forName: accountName)
         if let accountID, let existing = allAccounts.first(where: { $0.id == accountID }) {
             if let previousSourceID = existing.sourceID, previousSourceID != source.id,
+               !allAccounts.contains(where: {
+                   $0.id != existing.id && $0.sourceID == previousSourceID
+               }),
                let previousSource = sources.first(where: { $0.id == previousSourceID }) {
                 previousSource.isEnabled = false
             }
@@ -782,14 +1059,6 @@ final class AppState: ObservableObject {
                 iconColorHex: automaticStyle.colorHex
             )
             context.insert(account)
-        }
-        // A source created by older builds may still point at several
-        // automatically generated accounts. Once the user explicitly maps the
-        // folder, detach those legacy mappings so this source syncs only the
-        // chosen account.
-        for other in allAccounts where other.sourceID == source.id && other.id != account.id {
-            other.sourceID = nil
-            other.updatedAt = .now
         }
         try context.save()
 
@@ -858,15 +1127,14 @@ final class AppState: ObservableObject {
 
     private func verifyKnownPhotoCopies(context: ModelContext) {
         guard let videos = try? context.fetch(FetchDescriptor<VideoAsset>()) else { return }
+        let identifiers = videos.compactMap(\.photoLocalIdentifier)
+        guard let existingIdentifiers = photoLibrary.existingAssetIdentifiers(identifiers) else {
+            return
+        }
         var changed = false
         for video in videos where video.downloadedAt != nil {
-            guard
-                let identifier = video.photoLocalIdentifier,
-                let exists = photoLibrary.savedAssetExists(localIdentifier: identifier)
-            else {
-                continue
-            }
-            let missing = !exists
+            guard let identifier = video.photoLocalIdentifier else { continue }
+            let missing = !existingIdentifiers.contains(identifier)
             if video.isMissingFromPhotos != missing {
                 video.isMissingFromPhotos = missing
                 video.updatedAt = .now
@@ -874,6 +1142,17 @@ final class AppState: ObservableObject {
             }
         }
         if changed { try? context.save() }
+    }
+
+    private func scheduleStartupMaintenance(context: ModelContext) {
+        startupMaintenanceTask?.cancel()
+        lastAutomaticSyncAttempt = .now
+        startupMaintenanceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, let self else { return }
+            self.verifyKnownPhotoCopies(context: context)
+            await self.sync(context: context, announce: false)
+        }
     }
 
     private func verifyOriginalFile(video: VideoAsset, localURL: URL) async throws {
@@ -901,6 +1180,147 @@ final class AppState: ObservableObject {
         }.value
     }
 
+    private func syncCopyQueueNow(
+        googleUserID: String,
+        context: ModelContext
+    ) async throws -> CopyQueueSyncResult {
+        let sheetID = globalCopyQueueSheetID
+        let resourceKey = globalCopyQueueResourceKey
+        guard !sheetID.isEmpty else { throw CopyQueueError.sheetMissing }
+        let key = copyQueueSyncKey(
+            sheetID: sheetID,
+            resourceKey: resourceKey,
+            googleUserID: googleUserID
+        )
+        return try await serializedCopyQueueSync(key: key) {
+            try await self.copyQueueService.syncGlobal(
+                sheetID: sheetID,
+                resourceKey: resourceKey,
+                googleUserID: googleUserID,
+                context: context
+            )
+        }
+    }
+
+    private func serializedCopyQueueSync(
+        key: String,
+        operation: @escaping @MainActor () async throws -> CopyQueueSyncResult
+    ) async throws -> CopyQueueSyncResult {
+        if let activeTask = copyQueueSyncTask {
+            if copyQueueSyncTaskKey == key {
+                return try await activeTask.value
+            }
+            _ = try? await activeTask.value
+        }
+
+        let token = UUID()
+        let task = Task { @MainActor in
+            try await operation()
+        }
+        copyQueueSyncTask = task
+        copyQueueSyncTaskKey = key
+        copyQueueSyncTaskToken = token
+        defer {
+            if copyQueueSyncTaskToken == token {
+                copyQueueSyncTask = nil
+                copyQueueSyncTaskKey = nil
+                copyQueueSyncTaskToken = nil
+            }
+        }
+        return try await task.value
+    }
+
+    private func copyQueueSyncKey(
+        sheetID: String,
+        resourceKey: String?,
+        googleUserID: String
+    ) -> String {
+        "\(googleUserID)|\(sheetID)|\(resourceKey ?? "")"
+    }
+
+    private func applyCopyQueueConfiguration(from backup: TrackerBackup) {
+        guard let sheetID = backup.globalCopyQueueSheetID, !sheetID.isEmpty else { return }
+        globalCopyQueueLink = backup.globalCopyQueueLink?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        globalCopyQueueSheetID = sheetID
+        globalCopyQueueResourceKey = backup.globalCopyQueueResourceKey
+        persistActiveCopyQueueConfiguration()
+    }
+
+    @discardableResult
+    private func activateDriveSourceConfiguration(
+        for googleUserID: String,
+        context: ModelContext
+    ) throws -> Bool {
+        let currentSource = try context.fetch(FetchDescriptor<DriveSource>())
+            .filter { $0.googleUserID == googleUserID && $0.isEnabled }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first
+        rootLink = currentSource?.rootLink ?? ""
+        rootFolderID = currentSource?.rootFolderID ?? ""
+        rootResourceKey = currentSource?.rootResourceKey
+        return currentSource != nil
+    }
+
+    private func activateCopyQueueConfiguration(for googleUserID: String) {
+        activeCopyQueueGoogleUserID = googleUserID
+        if
+            let data = defaults.data(forKey: copyQueueConnectionKey(for: googleUserID)),
+            let connection = try? JSONDecoder().decode(CopyQueueConnection.self, from: data)
+        {
+            globalCopyQueueLink = connection.link
+            globalCopyQueueSheetID = connection.sheetID
+            globalCopyQueueResourceKey = connection.resourceKey
+            globalCopyQueueLastSyncedAt = connection.lastSyncedAt
+            globalCopyQueueIssue = nil
+            return
+        }
+
+        if
+            defaults.string(forKey: Keys.legacyCopyQueueOwner) == nil,
+            !globalCopyQueueSheetID.isEmpty
+        {
+            defaults.set(googleUserID, forKey: Keys.legacyCopyQueueOwner)
+            persistActiveCopyQueueConfiguration()
+            return
+        }
+
+        globalCopyQueueLink = ""
+        globalCopyQueueSheetID = ""
+        globalCopyQueueResourceKey = nil
+        globalCopyQueueLastSyncedAt = nil
+        globalCopyQueueIssue = nil
+    }
+
+    private func persistActiveCopyQueueConfiguration() {
+        guard let googleUserID = activeCopyQueueGoogleUserID else { return }
+        let connection = CopyQueueConnection(
+            link: globalCopyQueueLink,
+            sheetID: globalCopyQueueSheetID,
+            resourceKey: globalCopyQueueResourceKey,
+            lastSyncedAt: globalCopyQueueLastSyncedAt
+        )
+        guard let data = try? JSONEncoder().encode(connection) else { return }
+        defaults.set(data, forKey: copyQueueConnectionKey(for: googleUserID))
+        var userIDs = Set(defaults.stringArray(forKey: Keys.copyQueueConnectionUserIDs) ?? [])
+        userIDs.insert(googleUserID)
+        defaults.set(Array(userIDs), forKey: Keys.copyQueueConnectionUserIDs)
+    }
+
+    private func clearStoredCopyQueueConfigurations() {
+        let userIDs = defaults.stringArray(forKey: Keys.copyQueueConnectionUserIDs) ?? []
+        for userID in userIDs {
+            defaults.removeObject(forKey: copyQueueConnectionKey(for: userID))
+        }
+        defaults.removeObject(forKey: Keys.copyQueueConnectionUserIDs)
+        defaults.removeObject(forKey: Keys.legacyCopyQueueOwner)
+        activeCopyQueueGoogleUserID = auth.userID
+    }
+
+    private func copyQueueConnectionKey(for googleUserID: String) -> String {
+        "\(Keys.copyQueueConnectionPrefix)\(googleUserID)"
+    }
+
     private func perform(_ work: () async throws -> Void) async {
         isWorking = true
         errorMessage = nil
@@ -926,6 +1346,20 @@ final class AppState: ObservableObject {
         static let lastSyncAt = "lastSyncAt"
         static let requestedResetVerified = "requestedResetVerifiedV2"
         static let suppressAutomaticRestore = "suppressAutomaticRestore"
+        static let globalCopyQueueLink = "globalCopyQueueLink"
+        static let globalCopyQueueSheetID = "globalCopyQueueSheetID"
+        static let globalCopyQueueResourceKey = "globalCopyQueueResourceKey"
+        static let globalCopyQueueLastSyncedAt = "globalCopyQueueLastSyncedAt"
+        static let legacyCopyQueueOwner = "globalCopyQueueLegacyOwner"
+        static let copyQueueConnectionPrefix = "globalCopyQueueConnection."
+        static let copyQueueConnectionUserIDs = "globalCopyQueueConnectionUserIDs"
+    }
+
+    private struct CopyQueueConnection: Codable {
+        let link: String
+        let sheetID: String
+        let resourceKey: String?
+        let lastSyncedAt: Date?
     }
 }
 

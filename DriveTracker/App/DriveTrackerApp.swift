@@ -32,7 +32,9 @@ struct DriveTrackerApp: App {
             TikTokAccount.self,
             VideoAsset.self,
             DailyAssignment.self,
-            StatusEvent.self
+            StatusEvent.self,
+            CopyEntry.self,
+            CopyEvent.self
         ])
         let configuration = ModelConfiguration(
             "DriveTracker",
