@@ -48,7 +48,7 @@ struct LibraryView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 28)
+                .padding(.bottom, 96)
             }
             .trackerScreen()
             .navigationTitle("Library")
@@ -109,6 +109,7 @@ private struct AccountLibraryView: View {
     @State private var search = ""
     @State private var selectedStatus: VideoStatus?
     @State private var missingOnly = false
+    @State private var previewVideo: VideoAsset?
 
     private var filteredVideos: [VideoAsset] {
         account.videos
@@ -144,17 +145,36 @@ private struct AccountLibraryView: View {
                     .padding(.top, 44)
                 } else {
                     ForEach(filteredVideos) { video in
-                        NavigationLink {
-                            VideoDetailView(video: video)
-                        } label: {
-                            LibraryVideoRow(video: video)
+                        HStack(spacing: 8) {
+                            Button {
+                                previewVideo = video
+                            } label: {
+                                LibraryVideoRow(video: video, showsChevron: false)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(video.isMissingFromDrive || !video.canDownload)
+
+                            NavigationLink {
+                                VideoDetailView(video: video)
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(TrackerPalette.muted)
+                                    .frame(width: 42, height: 52)
+                                    .background(TrackerPalette.surface)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .stroke(TrackerPalette.line, lineWidth: 1)
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 28)
+            .padding(.bottom, 104)
         }
         .trackerScreen()
         .navigationTitle(account.displayName)
@@ -162,6 +182,9 @@ private struct AccountLibraryView: View {
         .searchable(text: $search, prompt: "Search videos or folders")
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .sheet(item: $previewVideo) { video in
+            VideoPreviewView(video: video)
+        }
     }
 
     private var filterBar: some View {
@@ -191,16 +214,19 @@ private struct AccountLibraryView: View {
 
 private struct LibraryVideoRow: View {
     let video: VideoAsset
+    var showsChevron = true
 
     var body: some View {
         HStack(spacing: 12) {
-            Rectangle()
-                .fill(video.status.tint)
-                .frame(width: 3, height: 48)
+            VideoThumbnailView(
+                video: video,
+                width: 82,
+                height: 110
+            )
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(video.name)
-                    .font(.subheadline.monospaced().weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 HStack(spacing: 9) {
@@ -229,11 +255,14 @@ private struct LibraryVideoRow: View {
                     .foregroundStyle(TrackerPalette.warning)
                     .accessibilityLabel("Deleted from Photos")
             }
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(TrackerPalette.muted)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(TrackerPalette.muted)
+            }
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(TrackerPalette.surface)
         .overlay {
             RoundedRectangle(cornerRadius: 10)
@@ -409,10 +438,8 @@ struct VideoPreviewView: View {
     let video: VideoAsset
 
     @State private var player: AVPlayer?
-    @State private var previewURL: URL?
     @State private var isLoading = true
     @State private var loadError: String?
-    @State private var isPlaying = false
 
     var body: some View {
         NavigationStack {
@@ -432,19 +459,6 @@ struct VideoPreviewView: View {
                     VideoPlayer(player: player)
                         .background(.black)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                    Button {
-                        if isPlaying {
-                            player.pause()
-                        } else {
-                            player.play()
-                        }
-                        isPlaying.toggle()
-                    } label: {
-                        Label(isPlaying ? "Pause" : "Play", systemImage: isPlaying ? "pause.fill" : "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(TrackerActionButtonStyle(kind: .primary))
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
@@ -472,9 +486,6 @@ struct VideoPreviewView: View {
             .task { await loadPreview() }
             .onDisappear {
                 player?.pause()
-                if let previewURL {
-                    try? FileManager.default.removeItem(at: previewURL)
-                }
             }
         }
     }
@@ -482,9 +493,10 @@ struct VideoPreviewView: View {
     private func loadPreview() async {
         isLoading = true
         do {
-            let url = try await state.previewFile(video)
-            previewURL = url
-            player = AVPlayer(url: url)
+            let item = try await state.previewPlayerItem(video)
+            let streamPlayer = AVPlayer(playerItem: item)
+            player = streamPlayer
+            streamPlayer.play()
         } catch {
             loadError = error.localizedDescription
         }

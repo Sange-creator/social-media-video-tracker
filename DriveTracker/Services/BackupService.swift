@@ -61,6 +61,7 @@ struct TrackerBackup: Codable {
         let size: Int64?
         let checksum: String?
         let driveModifiedAt: Date?
+        let thumbnailLink: String?
         let lastSeenAt: Date
         let isMissingFromDrive: Bool
         let canDownload: Bool
@@ -273,6 +274,7 @@ final class BackupService {
                     size: video.size,
                     checksum: video.checksum,
                     driveModifiedAt: video.driveModifiedAt,
+                    thumbnailLink: video.thumbnailLink,
                     lastSeenAt: video.lastSeenAt,
                     isMissingFromDrive: video.isMissingFromDrive,
                     canDownload: video.canDownload,
@@ -372,6 +374,7 @@ final class BackupService {
                 size: record.size,
                 checksum: record.checksum,
                 driveModifiedAt: record.driveModifiedAt,
+                thumbnailLink: record.thumbnailLink,
                 canDownload: record.canDownload,
                 account: account
             )

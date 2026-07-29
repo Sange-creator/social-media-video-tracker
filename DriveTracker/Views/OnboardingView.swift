@@ -545,18 +545,6 @@ struct FolderAssociationView: View {
                 }
 
                 Section {
-                    AccountIconPicker(
-                        symbol: $draftIconSymbol,
-                        colorHex: $draftIconColor
-                    )
-                    .padding(.vertical, 4)
-                } header: {
-                    Text("Account identity")
-                } footer: {
-                    Text("Give every account a distinct symbol and color.")
-                }
-
-                Section {
                     Picker("Associate with", selection: $selectedAccountID) {
                         Text("Create a new account").tag(nil as UUID?)
                         ForEach(accounts) { account in
@@ -646,6 +634,12 @@ struct FolderAssociationView: View {
                     draftIconSymbol = style.symbol
                     draftIconColor = style.colorHex
                 }
+            }
+            .onChange(of: accountName) { _, newValue in
+                guard selectedAccountID == nil else { return }
+                let style = AccountIconCatalog.style(forName: newValue)
+                draftIconSymbol = style.symbol
+                draftIconColor = style.colorHex
             }
         }
     }

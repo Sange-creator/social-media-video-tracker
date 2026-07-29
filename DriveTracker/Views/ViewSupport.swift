@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum TrackerPalette {
     static let canvas = Color(red: 0.035, green: 0.043, blue: 0.055)
@@ -186,37 +187,65 @@ struct AccountIdentityIcon: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: size * 0.42, weight: .bold))
-            .foregroundStyle(.white)
+            .font(.system(size: size * 0.38, weight: .semibold))
+            .foregroundStyle(Color(hex: colorHex))
             .frame(width: size, height: size)
-            .background(
-                LinearGradient(
-                    colors: [Color(hex: colorHex), Color(hex: colorHex).opacity(0.66)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.25, style: .continuous))
+            .background(Color(hex: colorHex).opacity(0.13))
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.20, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
-                    .stroke(.white.opacity(0.20), lineWidth: 1)
+                RoundedRectangle(cornerRadius: size * 0.20, style: .continuous)
+                    .stroke(Color(hex: colorHex).opacity(0.42), lineWidth: 1)
             }
-            .shadow(color: Color(hex: colorHex).opacity(0.28), radius: 10, y: 4)
             .overlay(alignment: .bottomTrailing) {
                 if let badge {
                     Text(badge)
-                        .font(.system(size: max(9, size * 0.20), weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .font(.system(size: max(8, size * 0.18), weight: .semibold, design: .monospaced))
+                        .foregroundStyle(TrackerPalette.muted)
                         .frame(minWidth: size * 0.38, minHeight: size * 0.38)
                         .padding(.horizontal, 2)
-                        .background(TrackerPalette.raised)
-                        .clipShape(Circle())
+                        .background(TrackerPalette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                         .overlay {
-                            Circle().stroke(TrackerPalette.canvas, lineWidth: 2)
+                            RoundedRectangle(cornerRadius: 4).stroke(TrackerPalette.line, lineWidth: 1)
                         }
                         .offset(x: size * 0.10, y: size * 0.10)
                 }
             }
+    }
+}
+
+struct VideoThumbnailView: View {
+    @EnvironmentObject private var state: AppState
+    let video: VideoAsset
+    var width: CGFloat = 108
+    var height: CGFloat = 144
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(TrackerPalette.raised)
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "film")
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(TrackerPalette.muted)
+            }
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(TrackerPalette.line, lineWidth: 1)
+        }
+        .task(id: video.thumbnailLink) {
+            image = await state.thumbnailImage(for: video)
+        }
     }
 }
 

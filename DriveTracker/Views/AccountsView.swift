@@ -51,7 +51,7 @@ struct AccountsView: View {
                     }
                 }
                 .padding(16)
-                .padding(.bottom, 28)
+                .padding(.bottom, 96)
             }
             .trackerScreen()
             .navigationTitle("Accounts")
@@ -103,8 +103,7 @@ private struct AccountRow: View {
                 AccountIdentityIcon(
                     symbol: account.iconSymbol,
                     colorHex: account.iconColorHex,
-                    size: 48,
-                    badge: "\(sequence)"
+                    size: 48
                 )
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -187,18 +186,6 @@ struct AccountEditorView: View {
                     }
                 }
                 .padding(.vertical, 5)
-            }
-
-            Section {
-                AccountIconPicker(
-                    symbol: $draftIconSymbol,
-                    colorHex: $draftIconColor
-                )
-                .padding(.vertical, 4)
-            } header: {
-                TrackerSectionLabel(title: "Account identity")
-            } footer: {
-                Text("Choose a different symbol and color so this account is easy to recognize everywhere.")
             }
 
             Section {
@@ -298,6 +285,11 @@ struct AccountEditorView: View {
             draftIconSymbol = account.iconSymbol
             draftIconColor = account.iconColorHex
         }
+        .onChange(of: draftHandle) { _, newValue in
+            let style = AccountIconCatalog.style(forName: newValue, fallbackID: account.id)
+            draftIconSymbol = style.symbol
+            draftIconColor = style.colorHex
+        }
         .confirmationDialog(
             "Delete \(account.displayName) from the tracker?",
             isPresented: $confirmDelete,
@@ -317,8 +309,9 @@ struct AccountEditorView: View {
         account.displayName = draftHandle
         account.dailyQuota = draftQuota
         account.isPaused = draftPaused
-        account.iconSymbol = draftIconSymbol
-        account.iconColorHex = draftIconColor
+        let style = AccountIconCatalog.style(forName: draftHandle, fallbackID: account.id)
+        account.iconSymbol = style.symbol
+        account.iconColorHex = style.colorHex
         state.accountChanged(account, context: context)
         if account.isConfigured, isSetupFlow {
             dismiss()

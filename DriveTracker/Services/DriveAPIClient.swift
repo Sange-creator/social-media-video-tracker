@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 struct DriveCapabilities: Decodable, Sendable {
@@ -17,6 +18,7 @@ struct DriveItem: Decodable, Identifiable, Sendable {
     let size: String?
     let md5Checksum: String?
     let modifiedTime: String?
+    let thumbnailLink: String?
     let resourceKey: String?
     let capabilities: DriveCapabilities?
     let shortcutDetails: DriveShortcutDetails?
@@ -213,6 +215,36 @@ final class DriveAPIClient {
         return destination
     }
 
+    /// Creates an authenticated streaming item so playback can begin as soon
+    /// as Google Drive returns the first media bytes.
+    func streamingPlayerItem(for item: VideoAsset) async throws -> AVPlayerItem {
+        let request = try await downloadRequest(for: item)
+        guard let url = request.url else { throw DriveAPIError.malformedURL }
+        let asset = AVURLAsset(
+            url: url,
+            options: [
+                "AVURLAssetHTTPHeaderFieldsKey": request.allHTTPHeaderFields ?? [:],
+                AVURLAssetAllowsCellularAccessKey: true
+            ]
+        )
+        return AVPlayerItem(asset: asset)
+    }
+
+    func thumbnailData(for item: VideoAsset) async throws -> Data {
+        guard let link = item.thumbnailLink else {
+            throw DriveAPIError.malformedURL
+        }
+        let highResolutionLink = link.replacingOccurrences(
+            of: "=s\\d+($|-[^?]+)",
+            with: "=s1000$1",
+            options: .regularExpression
+        )
+        guard let url = URL(string: highResolutionLink) else {
+            throw DriveAPIError.malformedURL
+        }
+        return try await data(for: authorizedRequest(url: url))
+    }
+
     func listAppDataFile(named name: String) async throws -> DriveItem? {
         var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")
         components?.queryItems = [
@@ -314,6 +346,6 @@ final class DriveAPIClient {
     }
 
     private static let fields =
-        "id,name,mimeType,size,md5Checksum,modifiedTime,resourceKey," +
+        "id,name,mimeType,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey," +
         "capabilities(canDownload),shortcutDetails(targetId,targetMimeType,targetResourceKey)"
 }

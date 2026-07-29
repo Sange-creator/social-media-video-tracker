@@ -19,25 +19,26 @@ struct RootView: View {
                     return
                 }
 
-                // Render a lightweight progress screen before constructing the
-                // dashboard. A cold debug build on the simulator can spend several
-                // seconds preparing SwiftUI's view metadata for all four tabs.
                 dashboardIsReady = false
                 await Task.yield()
-                try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
                 dashboardIsReady = true
             }
-            .alert(
-                "Social Media Video Tracker",
-                isPresented: Binding(
-                    get: { state.statusMessage != nil || state.errorMessage != nil },
-                    set: { if !$0 { state.dismissMessages() } }
-                )
-            ) {
-                Button("OK") { state.dismissMessages() }
-            } message: {
-                Text(state.errorMessage ?? state.statusMessage ?? "")
+            .overlay(alignment: .bottom) {
+                if let error = state.errorMessage {
+                    ImportantMessageBanner(message: error)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, hasConfiguredAccount ? 70 : 14)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
+            }
+            .animation(.easeOut(duration: 0.22), value: state.errorMessage)
+            .task(id: state.errorMessage) {
+                guard let message = state.errorMessage else { return }
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled, state.errorMessage == message else { return }
+                state.errorMessage = nil
             }
             .tint(TrackerPalette.accent)
             .preferredColorScheme(.dark)
@@ -71,6 +72,31 @@ struct RootView: View {
 
     private var hasConfiguredAccount: Bool {
         accounts.contains { $0.isConfigured }
+    }
+}
+
+private struct ImportantMessageBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(TrackerPalette.warning)
+            Text(message)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(TrackerPalette.warning.opacity(0.35), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
     }
 }
 
@@ -157,6 +183,8 @@ struct MainTabView: View {
         switch selectedTab {
         case .today:
             AnyView(TodayView())
+        case .analytics:
+            AnyView(AnalyticsView())
         case .library:
             AnyView(LibraryView())
         case .accounts:
@@ -169,6 +197,7 @@ struct MainTabView: View {
 
 private enum TrackerTab: String, CaseIterable, Identifiable {
     case today
+    case analytics
     case library
     case accounts
     case settings
@@ -179,6 +208,7 @@ private enum TrackerTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .today: "calendar"
+        case .analytics: "chart.bar.xaxis"
         case .library: "rectangle.stack"
         case .accounts: "person.2"
         case .settings: "gearshape"

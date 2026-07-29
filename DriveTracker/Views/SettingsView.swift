@@ -179,15 +179,28 @@ struct SettingsView: View {
 
     private var notificationSection: some View {
         Section {
+            Picker(
+                "United States time zone",
+                selection: Binding(
+                    get: { state.reminderTimeZoneID },
+                    set: { state.setReminderTimeZone($0, context: context) }
+                )
+            ) {
+                ForEach(USReminderTimeZone.allCases) { zone in
+                    Text("\(zone.title) (\(zone.shortTitle))")
+                        .tag(zone.rawValue)
+                }
+            }
+
             Button("Enable download reminders") {
                 Task {
                     let enabled = await state.enableDownloadNotifications(context: context)
-                    state.statusMessage = enabled
-                        ? "Download reminders enabled for the New York schedule."
-                        : "Notifications are disabled. Allow them in iPhone Settings."
+                    if !enabled {
+                        state.errorMessage = "Notifications are disabled. Allow them in iPhone Settings."
+                    }
                 }
             }
-            Text("The tracker reminds you at the three New York windows. Videos for different accounts are staggered by 10, 15, 20, or 30 minutes. Nothing downloads automatically.")
+            Text("The schedule changes immediately when you select a time zone. Reminders begin at 3:00 AM, 9:00 AM, 3:00 PM, and 9:00 PM in that zone. Accounts are staggered by five minutes.")
                 .font(.footnote)
                 .foregroundStyle(TrackerPalette.muted)
         } header: {
@@ -200,7 +213,7 @@ struct SettingsView: View {
             NavigationLink("How your data is handled") {
                 PrivacyView()
             }
-            LabeledContent("Analytics", value: "None")
+            LabeledContent("Analytics", value: "On-device only")
             LabeledContent("Advertising", value: "None")
             LabeledContent("External account login", value: "Not used")
         } header: {

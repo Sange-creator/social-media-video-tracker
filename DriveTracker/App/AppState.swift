@@ -1,4 +1,5 @@
 import CryptoKit
+import AVFoundation
 import Foundation
 import SwiftData
 import UIKit
@@ -16,6 +17,7 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastSyncAt: Date?
     @Published var downloadIdentity: String?
+    @Published private(set) var reminderTimeZoneID: String
 
     @Published var rootLink: String {
         didSet { defaults.set(rootLink, forKey: Keys.rootLink) }
@@ -37,6 +39,7 @@ final class AppState: ObservableObject {
     private let photoLibrary = PhotoLibraryService()
     private let assignmentEngine = AssignmentEngine()
     private let backupService: BackupService
+    private let thumbnailCache = NSCache<NSString, UIImage>()
     private var backupTask: Task<Void, Never>?
     private var hasStarted = false
     private var lastAutomaticSyncAttempt: Date?
@@ -49,7 +52,9 @@ final class AppState: ObservableObject {
         self.api = api
         self.syncService = DriveSyncService(api: api)
         self.downloads = DownloadCoordinator()
-        self.notifications = DownloadNotificationService()
+        let notifications = DownloadNotificationService(defaults: defaults)
+        self.notifications = notifications
+        self.reminderTimeZoneID = notifications.timeZoneID
         self.backupService = BackupService(api: api, defaults: defaults)
         self.rootLink = defaults.string(forKey: Keys.rootLink) ?? ""
         self.rootFolderID = defaults.string(forKey: Keys.rootFolderID) ?? ""
@@ -64,6 +69,7 @@ final class AppState: ObservableObject {
         guard !hasStarted else { return }
         hasStarted = true
         purgeLegacyDemoData(context: context)
+        refreshAutomaticAccountIcons(context: context)
         downloads.setRecoveryHandler { [weak self] identity, url in
             Task { @MainActor in
                 await self?.finishRecoveredDownload(
@@ -227,7 +233,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func sync(context: ModelContext, announce: Bool = true) async {
+    func sync(context: ModelContext, announce: Bool = false) async {
         guard !isWorking else { return }
         isWorking = true
         if announce { errorMessage = nil }
@@ -312,6 +318,13 @@ final class AppState: ObservableObject {
     func scheduleDownloadNotifications(context: ModelContext) async {
         let assignments = (try? context.fetch(FetchDescriptor<DailyAssignment>())) ?? []
         await notifications.schedule(assignments: assignments)
+    }
+
+    func setReminderTimeZone(_ id: String, context: ModelContext) {
+        guard USReminderTimeZone(rawValue: id) != nil else { return }
+        reminderTimeZoneID = id
+        notifications.setTimeZone(id: id)
+        Task { await scheduleDownloadNotifications(context: context) }
     }
 
     func replace(_ assignment: DailyAssignment, context: ModelContext) {
@@ -499,6 +512,9 @@ final class AppState: ObservableObject {
     func accountChanged(_ account: TikTokAccount, context: ModelContext) {
         account.dailyQuota = min(30, max(1, account.dailyQuota))
         account.displayName = account.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let style = AccountIconCatalog.style(forName: account.displayName, fallbackID: account.id)
+        account.iconSymbol = style.symbol
+        account.iconColorHex = style.colorHex
         account.isConfigured = !account.displayName.isEmpty
         account.updatedAt = .now
         do {
@@ -547,6 +563,34 @@ final class AppState: ObservableObject {
         return try await api.previewFile(for: video)
     }
 
+    func previewPlayerItem(_ video: VideoAsset) async throws -> AVPlayerItem {
+        guard auth.userID == video.googleUserID else {
+            throw DriveAssociationError.wrongGoogleAccount(video.account?.googleEmail)
+        }
+        guard !video.isMissingFromDrive else {
+            throw DriveAssociationError.videoMissing
+        }
+        return try await api.streamingPlayerItem(for: video)
+    }
+
+    func thumbnailImage(for video: VideoAsset) async -> UIImage? {
+        let cacheKey = video.identityKey as NSString
+        if let cached = thumbnailCache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard
+            auth.userID == video.googleUserID,
+            !video.isMissingFromDrive,
+            video.thumbnailLink != nil,
+            let data = try? await api.thumbnailData(for: video),
+            let image = UIImage(data: data)
+        else {
+            return nil
+        }
+        thumbnailCache.setObject(image, forKey: cacheKey, cost: data.count)
+        return image
+    }
+
     func backupNow(context: ModelContext) async {
         guard auth.isSignedIn, let userID = auth.userID else { return }
         do {
@@ -558,10 +602,8 @@ final class AppState: ObservableObject {
                 googleUserID: userID
             )
             objectWillChange.send()
-            statusMessage = "Tracking backup saved to Google Drive."
         } catch {
             backupService.markDirty()
-            errorMessage = "Backup pending: \(error.localizedDescription)"
         }
     }
 
@@ -643,6 +685,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func refreshAutomaticAccountIcons(context: ModelContext) {
+        guard let accounts = try? context.fetch(FetchDescriptor<TikTokAccount>()) else { return }
+        var changed = false
+        for account in accounts {
+            let style = AccountIconCatalog.style(forName: account.displayName, fallbackID: account.id)
+            if account.iconSymbol != style.symbol || account.iconColorHex != style.colorHex {
+                account.iconSymbol = style.symbol
+                account.iconColorHex = style.colorHex
+                changed = true
+            }
+        }
+        if changed { try? context.save() }
+    }
+
     func dismissMessages() {
         statusMessage = nil
         errorMessage = nil
@@ -690,6 +746,7 @@ final class AppState: ObservableObject {
 
         let allAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
         let account: TikTokAccount
+        let automaticStyle = AccountIconCatalog.style(forName: accountName)
         if let accountID, let existing = allAccounts.first(where: { $0.id == accountID }) {
             if let previousSourceID = existing.sourceID, previousSourceID != source.id,
                let previousSource = sources.first(where: { $0.id == previousSourceID }) {
@@ -701,8 +758,8 @@ final class AppState: ObservableObject {
             account.folderName = folderName
             account.displayName = accountName
             account.dailyQuota = min(30, max(1, dailyQuota))
-            account.iconSymbol = iconSymbol
-            account.iconColorHex = iconColorHex
+            account.iconSymbol = automaticStyle.symbol
+            account.iconColorHex = automaticStyle.colorHex
             account.sourceID = source.id
             account.googleEmail = email
             account.googleUserID = userID
@@ -721,8 +778,8 @@ final class AppState: ObservableObject {
                 sourceID: source.id,
                 googleEmail: email,
                 isConfigured: true,
-                iconSymbol: iconSymbol,
-                iconColorHex: iconColorHex
+                iconSymbol: automaticStyle.symbol,
+                iconColorHex: automaticStyle.colorHex
             )
             context.insert(account)
         }

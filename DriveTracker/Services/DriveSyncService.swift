@@ -55,6 +55,7 @@ final class DriveSyncService {
                 video.size = item.sizeValue
                 video.checksum = item.md5Checksum
                 video.driveModifiedAt = item.modifiedDate
+                video.thumbnailLink = item.thumbnailLink
                 video.lastSeenAt = scanTime
                 video.isMissingFromDrive = false
                 video.canDownload = item.capabilities?.canDownload ?? true
@@ -72,6 +73,7 @@ final class DriveSyncService {
                     size: item.sizeValue,
                     checksum: item.md5Checksum,
                     driveModifiedAt: item.modifiedDate,
+                    thumbnailLink: item.thumbnailLink,
                     canDownload: item.capabilities?.canDownload ?? true,
                     account: account
                 )

@@ -21,6 +21,18 @@ struct TodayView: View {
         }.count
     }
 
+    private var downloadedTotal: Int {
+        accounts.lazy.flatMap(\.videos).filter { $0.downloadedAt != nil }.count
+    }
+
+    private var uploadedTotal: Int {
+        accounts.lazy.flatMap(\.videos).filter { $0.uploadedAt != nil }.count
+    }
+
+    private var selectedUSZone: USReminderTimeZone {
+        USReminderTimeZone(rawValue: state.reminderTimeZoneID) ?? .eastern
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -32,18 +44,28 @@ struct TodayView: View {
                         accountCount: activeAccounts.count
                     )
 
+                    AnalyticsHeader(
+                        downloaded: downloadedTotal,
+                        uploaded: uploadedTotal
+                    )
+
                     scheduleCard
 
                     HStack {
                         TrackerSectionLabel(
-                            title: "Today’s suggestions",
-                            trailing: "\(activeAccounts.count) accounts"
+                            title: "Choose an account",
+                            trailing: "\(activeAccounts.count) active"
                         )
                     }
                     .padding(.top, 4)
 
-                    ForEach(Array(activeAccounts.enumerated()), id: \.element.id) { index, account in
-                        AccountTodaySection(account: account, sequence: index + 1)
+                    ForEach(activeAccounts) { account in
+                        NavigationLink {
+                            TodayAccountDetailView(account: account)
+                        } label: {
+                            TodayAccountRow(account: account)
+                        }
+                        .buttonStyle(.plain)
                     }
 
                     if activeAccounts.isEmpty {
@@ -57,7 +79,7 @@ struct TodayView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 32)
+                .padding(.bottom, 96)
             }
             .trackerScreen()
             .navigationTitle("Today")
@@ -65,7 +87,7 @@ struct TodayView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await state.sync(context: context) }
+                        Task { await state.sync(context: context, announce: false) }
                     } label: {
                         if state.isWorking {
                             ProgressView()
@@ -81,7 +103,7 @@ struct TodayView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .refreshable {
                 if state.hasRootFolder {
-                    await state.sync(context: context)
+                    await state.sync(context: context, announce: false)
                 } else {
                     try? state.ensureToday(context: context)
                 }
@@ -124,7 +146,7 @@ struct TodayView: View {
                 Label("Suggested US schedule", systemImage: "clock.badge.checkmark")
                     .font(.headline.weight(.bold))
                 Spacer()
-                Text("New York")
+                Text(selectedUSZone.title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(TrackerPalette.accent)
             }
@@ -137,7 +159,7 @@ struct TodayView: View {
                         Text("VIDEO (slot.number)")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(TrackerPalette.muted)
-                        Text(slot.label)
+                        Text(slot.label(in: selectedUSZone.timeZone))
                             .font(.subheadline.monospacedDigit().weight(.bold))
                     }
                     .frame(maxWidth: .infinity)
@@ -145,6 +167,31 @@ struct TodayView: View {
                     .background(TrackerPalette.raised)
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                 }
+            }
+        }
+        .trackerCard()
+    }
+}
+
+private struct AnalyticsHeader: View {
+    let downloaded: Int
+    let uploaded: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            TrackerSectionLabel(title: "All-time analytics")
+            HStack {
+                TrackerMetric(
+                    value: "\(downloaded)",
+                    label: "Downloaded",
+                    tint: TrackerPalette.accent
+                )
+                Spacer()
+                TrackerMetric(
+                    value: "\(uploaded)",
+                    label: "Uploaded to TikTok",
+                    tint: TrackerPalette.success
+                )
             }
         }
         .trackerCard()
@@ -196,11 +243,72 @@ private struct ProgressHeader: View {
     }
 }
 
+private struct TodayAccountRow: View {
+    let account: TikTokAccount
+
+    private var todaysCompleted: Int {
+        account.videos.filter {
+            guard let uploadedAt = $0.uploadedAt else { return false }
+            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
+        }.count
+    }
+
+    var body: some View {
+        HStack(spacing: 13) {
+            AccountIdentityIcon(
+                symbol: account.iconSymbol,
+                colorHex: account.iconColorHex,
+                size: 44
+            )
+            Text(account.displayName)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            Spacer()
+            Text("\(todaysCompleted)/\(account.dailyQuota)")
+                .font(.subheadline.monospacedDigit().weight(.semibold))
+                .foregroundStyle(
+                    todaysCompleted >= account.dailyQuota
+                        ? TrackerPalette.success
+                        : TrackerPalette.muted
+                )
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(TrackerPalette.muted)
+        }
+        .trackerCard(padding: 13)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct TodayAccountDetailView: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var state: AppState
+    let account: TikTokAccount
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                AccountTodaySection(account: account)
+            }
+            .padding(16)
+            .padding(.bottom, 104)
+        }
+        .trackerScreen()
+        .navigationTitle(account.displayName)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .refreshable {
+            await state.sync(context: context, announce: false)
+        }
+    }
+}
+
 private struct AccountTodaySection: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let account: TikTokAccount
-    let sequence: Int
     @State private var showManualPicker = false
 
     private var todaysVideos: [VideoAsset] {
@@ -231,8 +339,7 @@ private struct AccountTodaySection: View {
                 AccountIdentityIcon(
                     symbol: account.iconSymbol,
                     colorHex: account.iconColorHex,
-                    size: 46,
-                    badge: "\(sequence)"
+                    size: 46
                 )
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -361,26 +468,32 @@ private struct ManualVideoPickerView: View {
                     } else {
                         ForEach(availableVideos) { video in
                             VStack(alignment: .leading, spacing: 10) {
-                                Text(video.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(2)
-                                Label(
-                                    video.folderPath.isEmpty ? account.folderName : video.folderPath,
-                                    systemImage: "folder"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(TrackerPalette.muted)
-                                .lineLimit(2)
+                                HStack(alignment: .top, spacing: 12) {
+                                    VideoThumbnailView(
+                                        video: video,
+                                        width: 106,
+                                        height: 142
+                                    )
+
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(video.name)
+                                            .font(.subheadline.weight(.semibold))
+                                            .lineLimit(2)
+                                        Label(
+                                            video.folderPath.isEmpty ? account.folderName : video.folderPath,
+                                            systemImage: "folder"
+                                        )
+                                        .font(.caption)
+                                        .foregroundStyle(TrackerPalette.muted)
+                                        .lineLimit(2)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    previewVideo = video
+                                }
 
                                 HStack(spacing: 10) {
-                                    Button {
-                                        previewVideo = video
-                                    } label: {
-                                        Label("Preview", systemImage: "play.fill")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
-
                                     Button {
                                         Task {
                                             state.dismissMessages()
@@ -444,28 +557,22 @@ private struct TodayVideoRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                Text(String(format: "%02d", slot))
-                    .font(.caption2.monospacedDigit().weight(.bold))
-                    .foregroundStyle(TrackerPalette.muted)
-                    .frame(width: 26, alignment: .leading)
+                VideoThumbnailView(video: video)
+                    .overlay(alignment: .topLeading) {
+                        Text(String(format: "%02d", slot))
+                            .font(.caption2.monospacedDigit().weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(.black.opacity(0.68))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .padding(5)
+                    }
 
                 VStack(alignment: .leading, spacing: 7) {
-                    HStack(alignment: .top) {
-                        Text(video.name)
-                            .font(.subheadline.monospaced().weight(.semibold))
-                            .lineLimit(2)
-                        Spacer(minLength: 8)
-                        Button {
-                            showPreview = true
-                        } label: {
-                            Image(systemName: "play.circle.fill")
-                                .font(.title2)
-                                .foregroundStyle(TrackerPalette.accent)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(video.isMissingFromDrive || !video.canDownload)
-                        .accessibilityLabel("Preview \(video.name)")
-                    }
+                    Text(video.name)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
                     if !video.folderPath.isEmpty {
                         Label(video.folderPath, systemImage: "folder")
                             .font(.caption2)
@@ -474,7 +581,10 @@ private struct TodayVideoRow: View {
                     }
                     if (video.status == .assigned || video.status == .downloaded),
                        let assignment = video.activeAssignment {
-                        Text("Suggested window • \(NewYorkSchedule.slot(for: assignment.slot).label) New York")
+                        let zone = USReminderTimeZone(rawValue: state.reminderTimeZoneID) ?? .eastern
+                        Text(
+                            "Suggested window • \(NewYorkSchedule.slot(for: assignment.slot).label(in: zone.timeZone)) \(zone.shortTitle)"
+                        )
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(TrackerPalette.accent)
                     }
@@ -494,6 +604,11 @@ private struct TodayVideoRow: View {
                 }
                 Spacer(minLength: 0)
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !video.isMissingFromDrive, video.canDownload else { return }
+                showPreview = true
+            }
 
             if isDownloading,
                let progress = state.downloads.progressByIdentity[video.identityKey] {
@@ -509,7 +624,6 @@ private struct TodayVideoRow: View {
             }
 
             actionRow
-                .padding(.leading, 38)
         }
         .padding(15)
         .sheet(isPresented: $showPreview) {

@@ -178,14 +178,15 @@ enum AccountIconCatalog {
     }
 
     nonisolated static let symbols = [
-        "sparkles", "bolt.fill", "flame.fill", "star.fill",
-        "crown.fill", "diamond.fill", "leaf.fill", "moon.stars.fill",
-        "sun.max.fill", "heart.fill", "camera.fill", "play.rectangle.fill"
+        "person.crop.square", "camera.aperture", "video", "waveform",
+        "newspaper", "fork.knife", "figure.run", "airplane",
+        "laptopcomputer", "gamecontroller", "graduationcap", "chart.line.uptrend.xyaxis",
+        "tshirt", "music.note", "pawprint", "sportscourt"
     ]
 
     nonisolated static let colors = [
-        "#4F46E5", "#2563EB", "#0891B2", "#059669",
-        "#D97706", "#EA580C", "#E11D48", "#9333EA"
+        "#334155", "#1E3A5F", "#164E63", "#14532D",
+        "#713F12", "#7C2D12", "#701A75", "#3F3F46"
     ]
 
     nonisolated static func style(for id: UUID) -> Style {
@@ -199,6 +200,43 @@ enum AccountIconCatalog {
         Style(
             symbol: symbols[position % symbols.count],
             colorHex: colors[position % colors.count]
+        )
+    }
+
+    /// Produces a restrained, deterministic identity from the account name.
+    /// Names in the same content category share an intuitive SF Symbol while
+    /// the stable color hash keeps similarly named accounts distinguishable.
+    nonisolated static func style(forName name: String, fallbackID: UUID? = nil) -> Style {
+        let normalized = name.lowercased()
+        let keywordStyles: [(keywords: [String], symbol: String)] = [
+            (["food", "recipe", "cook", "kitchen", "meal"], "fork.knife"),
+            (["fit", "gym", "health", "workout", "run"], "figure.run"),
+            (["travel", "trip", "flight", "tour"], "airplane"),
+            (["tech", "code", "software", "digital", "ai"], "laptopcomputer"),
+            (["game", "gaming", "gamer"], "gamecontroller"),
+            (["learn", "school", "study", "education"], "graduationcap"),
+            (["money", "finance", "business", "invest"], "chart.line.uptrend.xyaxis"),
+            (["fashion", "style", "outfit", "cloth"], "tshirt"),
+            (["music", "song", "audio", "sound"], "music.note"),
+            (["pet", "dog", "cat", "animal"], "pawprint"),
+            (["sport", "ball", "soccer", "basketball"], "sportscourt"),
+            (["news", "media", "daily", "update"], "newspaper"),
+            (["photo", "camera", "beauty", "makeup"], "camera.aperture"),
+            (["podcast", "voice", "talk"], "waveform")
+        ]
+        let symbol = keywordStyles.first {
+            $0.keywords.contains { normalized.contains($0) }
+        }?.symbol ?? "video"
+
+        let stableValue: Int
+        if normalized.isEmpty, let fallbackID {
+            stableValue = fallbackID.uuidString.utf8.reduce(0) { ($0 &* 31) &+ Int($1) }
+        } else {
+            stableValue = normalized.utf8.reduce(0) { ($0 &* 31) &+ Int($1) }
+        }
+        return Style(
+            symbol: symbol,
+            colorHex: colors[abs(stableValue) % colors.count]
         )
     }
 }
@@ -218,6 +256,7 @@ final class VideoAsset {
     var size: Int64?
     var checksum: String?
     var driveModifiedAt: Date?
+    var thumbnailLink: String?
     var lastSeenAt: Date
     var isMissingFromDrive: Bool
     var canDownload: Bool
@@ -247,6 +286,7 @@ final class VideoAsset {
         size: Int64? = nil,
         checksum: String? = nil,
         driveModifiedAt: Date? = nil,
+        thumbnailLink: String? = nil,
         canDownload: Bool = true,
         account: TikTokAccount? = nil
     ) {
@@ -265,6 +305,7 @@ final class VideoAsset {
         self.size = size
         self.checksum = checksum
         self.driveModifiedAt = driveModifiedAt
+        self.thumbnailLink = thumbnailLink
         self.lastSeenAt = .now
         self.isMissingFromDrive = false
         self.canDownload = canDownload
