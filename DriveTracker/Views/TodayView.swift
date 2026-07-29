@@ -10,25 +10,6 @@ struct TodayView: View {
         accounts.filter { $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }
     }
 
-    private var quotaTotal: Int {
-        activeAccounts.reduce(0) { $0 + $1.dailyQuota }
-    }
-
-    private var uploadedToday: Int {
-        activeAccounts.flatMap(\.videos).filter {
-            guard let uploadedAt = $0.uploadedAt else { return false }
-            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
-        }.count
-    }
-
-    private var downloadedTotal: Int {
-        accounts.lazy.flatMap(\.videos).filter { $0.downloadedAt != nil }.count
-    }
-
-    private var uploadedTotal: Int {
-        accounts.lazy.flatMap(\.videos).filter { $0.uploadedAt != nil }.count
-    }
-
     private var selectedUSZone: USReminderTimeZone {
         USReminderTimeZone(rawValue: state.reminderTimeZoneID) ?? .eastern
     }
@@ -38,18 +19,8 @@ struct TodayView: View {
             ScrollView {
                 LazyVStack(spacing: 18) {
                     commandHeader
-                    ProgressHeader(
-                        uploaded: uploadedToday,
-                        target: quotaTotal,
-                        accountCount: activeAccounts.count
-                    )
-
-                    AnalyticsHeader(
-                        downloaded: downloadedTotal,
-                        uploaded: uploadedTotal
-                    )
-
                     scheduleCard
+                    GlobalCopyQueueCard()
 
                     HStack {
                         TrackerSectionLabel(
@@ -117,27 +88,41 @@ struct TodayView: View {
     }
 
     private var commandHeader: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("DAILY TRACKER")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.6)
-                    .foregroundStyle(TrackerPalette.accent)
-                Text(Date.now.formatted(.dateTime.weekday(.wide).month(.wide).day()))
-                    .font(.subheadline)
-                    .foregroundStyle(TrackerPalette.muted)
+        TimelineView(.periodic(from: .now, by: 60)) { timeline in
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(
+                        formattedDate(timeline.date)
+                    )
+                    .font(.subheadline.weight(.semibold))
+
+                    Text(selectedUSZone.title.uppercased())
+                        .font(.caption2.weight(.bold))
+                        .tracking(1.3)
+                        .foregroundStyle(TrackerPalette.accent)
+                }
+                Spacer()
+                Text(
+                    formattedTime(timeline.date)
+                )
+                .font(.title2.monospacedDigit().weight(.bold))
             }
-            Spacer()
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(TrackerPalette.success)
-                    .frame(width: 7, height: 7)
-                Text("LOCAL")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1)
-                    .foregroundStyle(TrackerPalette.muted)
-            }
+            .trackerCard(padding: 14)
         }
+    }
+
+    private func formattedDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeZone = selectedUSZone.timeZone
+        formatter.dateFormat = "EEEE, MMMM d"
+        return formatter.string(from: date)
+    }
+
+    private func formattedTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeZone = selectedUSZone.timeZone
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: date)
     }
 
     private var scheduleCard: some View {
@@ -150,13 +135,10 @@ struct TodayView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(TrackerPalette.accent)
             }
-            Text("Starting windows for a broad US audience. Replace these with your own analytics when you have enough history.")
-                .font(.caption)
-                .foregroundStyle(TrackerPalette.muted)
             HStack(spacing: 8) {
                 ForEach(NewYorkSchedule.slots) { slot in
                     VStack(spacing: 3) {
-                        Text("VIDEO (slot.number)")
+                        Text("VIDEO \(slot.number)")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(TrackerPalette.muted)
                         Text(slot.label(in: selectedUSZone.timeZone))
@@ -173,85 +155,8 @@ struct TodayView: View {
     }
 }
 
-private struct AnalyticsHeader: View {
-    let downloaded: Int
-    let uploaded: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            TrackerSectionLabel(title: "All-time analytics")
-            HStack {
-                TrackerMetric(
-                    value: "\(downloaded)",
-                    label: "Downloaded",
-                    tint: TrackerPalette.accent
-                )
-                Spacer()
-                TrackerMetric(
-                    value: "\(uploaded)",
-                    label: "Uploaded to TikTok",
-                    tint: TrackerPalette.success
-                )
-            }
-        }
-        .trackerCard()
-    }
-}
-
-private struct ProgressHeader: View {
-    let uploaded: Int
-    let target: Int
-    let accountCount: Int
-
-    private var progress: Double {
-        target > 0 ? Double(uploaded) / Double(target) : 0
-    }
-
-    var body: some View {
-        VStack(spacing: 18) {
-            HStack(alignment: .top, spacing: 24) {
-                TrackerMetric(
-                    value: "\(uploaded)/\(target)",
-                    label: "Completed today",
-                    tint: progress >= 1 ? TrackerPalette.success : .white
-                )
-                Spacer()
-                TrackerMetric(value: "\(accountCount)", label: "Active accounts")
-                TrackerMetric(
-                    value: progress.formatted(.percent.precision(.fractionLength(0))),
-                    label: "Completion",
-                    tint: TrackerPalette.accent
-                )
-            }
-
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Rectangle().fill(TrackerPalette.raised)
-                    Rectangle()
-                        .fill(progress >= 1 ? TrackerPalette.success : TrackerPalette.accent)
-                        .frame(width: geometry.size.width * min(progress, 1))
-                }
-            }
-            .frame(height: 4)
-        }
-        .trackerCard()
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(progress >= 1 ? TrackerPalette.success : TrackerPalette.accent)
-                .frame(height: 2)
-        }
-    }
-}
-
 private struct TodayAccountRow: View {
     let account: TikTokAccount
-
-    private var todaysCompleted: Int {
-        account.videos.filter {
-            guard let uploadedAt = $0.uploadedAt else { return false }
-            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
-        }.count
-    }
 
     var body: some View {
         HStack(spacing: 13) {
@@ -265,13 +170,6 @@ private struct TodayAccountRow: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
             Spacer()
-            Text("\(todaysCompleted)/\(account.dailyQuota)")
-                .font(.subheadline.monospacedDigit().weight(.semibold))
-                .foregroundStyle(
-                    todaysCompleted >= account.dailyQuota
-                        ? TrackerPalette.success
-                        : TrackerPalette.muted
-                )
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.bold))
                 .foregroundStyle(TrackerPalette.muted)

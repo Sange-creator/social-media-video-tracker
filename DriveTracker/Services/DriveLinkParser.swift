@@ -5,6 +5,11 @@ struct DriveFolderReference: Equatable, Sendable {
     let resourceKey: String?
 }
 
+struct GoogleSheetReference: Equatable, Sendable {
+    let fileID: String
+    let resourceKey: String?
+}
+
 enum DriveLinkError: LocalizedError, Equatable {
     case empty
     case invalidFolderLink
@@ -60,3 +65,61 @@ struct DriveLinkParser {
     }
 }
 
+enum GoogleSheetLinkError: LocalizedError, Equatable {
+    case empty
+    case invalidLink
+
+    var errorDescription: String? {
+        switch self {
+        case .empty:
+            "Paste the Google Sheet link used for the global copy queue."
+        case .invalidLink:
+            "This is not a valid Google Sheet or Google Drive file link."
+        }
+    }
+}
+
+struct GoogleSheetLinkParser {
+    func parse(_ input: String) throws -> GoogleSheetReference {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { throw GoogleSheetLinkError.empty }
+
+        if isLikelyID(value) {
+            return GoogleSheetReference(fileID: value, resourceKey: nil)
+        }
+
+        guard
+            let components = URLComponents(string: value),
+            let host = components.host?.lowercased(),
+            host == "docs.google.com" ||
+            host == "drive.google.com" ||
+            host.hasSuffix(".drive.google.com")
+        else {
+            throw GoogleSheetLinkError.invalidLink
+        }
+
+        let parts = components.path.split(separator: "/").map(String.init)
+        var fileID: String?
+        if let dIndex = parts.firstIndex(of: "d"), parts.indices.contains(dIndex + 1) {
+            fileID = parts[dIndex + 1]
+        } else if let id = components.queryItems?.first(where: {
+            $0.name.lowercased() == "id"
+        })?.value {
+            fileID = id
+        }
+
+        guard let fileID, isLikelyID(fileID) else {
+            throw GoogleSheetLinkError.invalidLink
+        }
+
+        let resourceKey = components.queryItems?
+            .first(where: { $0.name.lowercased() == "resourcekey" })?
+            .value
+        return GoogleSheetReference(fileID: fileID, resourceKey: resourceKey)
+    }
+
+    private func isLikelyID(_ value: String) -> Bool {
+        value.count >= 10 &&
+        value.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
+    }
+}

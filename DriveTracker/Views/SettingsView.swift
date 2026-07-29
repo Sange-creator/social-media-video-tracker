@@ -1,5 +1,6 @@
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var context
@@ -14,12 +15,16 @@ struct SettingsView: View {
     @State private var pendingFolder: DriveFolderChoice?
     @State private var pendingFolderLink: String?
     @State private var isResolvingLink = false
+    @State private var isConnectingQueue = false
+    @State private var queueLinkDraft = ""
+    @FocusState private var isQueueLinkFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
                 googleSection
                 driveSection
+                copyQueueSection
                 notificationSection
                 backupSection
                 privacySection
@@ -29,7 +34,16 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .onAppear { folderLink = state.rootLink }
+            .onAppear {
+                folderLink = state.rootLink
+                queueLinkDraft = state.globalCopyQueueLink
+            }
+            .onChange(of: state.globalCopyQueueLink) { _, newValue in
+                if !isQueueLinkFocused, !isConnectingQueue {
+                    queueLinkDraft = newValue
+                }
+            }
+            .onDisappear { dismissQueueKeyboard() }
         }
         .confirmationDialog("Delete all local tracking data?", isPresented: $confirmDeleteLocal) {
             Button("Delete local data", role: .destructive) {
@@ -68,6 +82,146 @@ struct SettingsView: View {
         .sheet(item: $pendingFolder) { folder in
             FolderAssociationView(folder: folder, originalLink: pendingFolderLink)
         }
+    }
+
+    private var copyQueueSection: some View {
+        Section {
+            TextField(
+                "Google Sheet link",
+                text: $queueLinkDraft,
+                axis: .vertical
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.URL)
+            .font(.footnote.monospaced())
+            .lineLimit(2 ... 5)
+            .submitLabel(.done)
+            .focused($isQueueLinkFocused)
+            .onSubmit { isQueueLinkFocused = false }
+
+            HStack(spacing: 10) {
+                Button {
+                    pasteQueueLink()
+                } label: {
+                    Label("Paste Link", systemImage: "doc.on.clipboard")
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    selectAllQueueLink()
+                } label: {
+                    Label("Select All", systemImage: "selection.pin.in.out")
+                }
+                .disabled(queueLinkDraft.isEmpty)
+            }
+            .buttonStyle(.borderless)
+
+            Button {
+                saveQueueLink()
+            } label: {
+                HStack {
+                    if isConnectingQueue {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "link")
+                    }
+                    Text(
+                        isConnectingQueue
+                            ? "Checking Google Sheet…"
+                            : state.hasGlobalCopyQueueSheet
+                                ? "Save and reconnect Sheet"
+                                : "Connect Google Sheet"
+                    )
+                }
+            }
+            .disabled(
+                !auth.isSignedIn ||
+                isConnectingQueue ||
+                queueLinkDraft
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty
+            )
+
+            if state.hasGlobalCopyQueueSheet, !hasUnsavedQueueLink {
+                Label("Global queue connected", systemImage: "checkmark.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TrackerPalette.success)
+            } else if hasUnsavedQueueLink {
+                Label("Link changed — save to connect it", systemImage: "pencil.circle.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TrackerPalette.warning)
+            }
+
+            if let lastSynced = state.globalCopyQueueLastSyncedAt {
+                LabeledContent("Last queue sync", value: lastSynced.formatted())
+                    .font(.footnote)
+            }
+
+            Text("You can replace this URL at any time. The app validates the new Sheet before switching, so an invalid link does not erase the current queue history. Put one complete title-and-hashtag block in each cell in column A; the “Content” header in A1 is optional.")
+                .font(.footnote)
+                .foregroundStyle(TrackerPalette.muted)
+        } header: {
+            TrackerSectionLabel(title: "Global copy queue")
+        }
+    }
+
+    private func saveQueueLink() {
+        guard !isConnectingQueue else { return }
+        dismissQueueKeyboard()
+        isConnectingQueue = true
+        Task {
+            let connected = await state.connectGlobalCopyQueue(
+                link: queueLinkDraft,
+                context: context
+            )
+            if connected {
+                queueLinkDraft = state.globalCopyQueueLink
+            }
+            isConnectingQueue = false
+            dismissQueueKeyboard()
+        }
+    }
+
+    private func pasteQueueLink() {
+        guard let pastedLink = UIPasteboard.general.string?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !pastedLink.isEmpty
+        else {
+            state.errorMessage = "Copy a Google Sheet link first, then tap Paste Link."
+            return
+        }
+
+        queueLinkDraft = pastedLink
+        dismissQueueKeyboard()
+    }
+
+    private func selectAllQueueLink() {
+        isQueueLinkFocused = true
+        DispatchQueue.main.async {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.selectAll(_:)),
+                to: nil,
+                from: nil,
+                for: nil
+            )
+        }
+    }
+
+    private var hasUnsavedQueueLink: Bool {
+        queueLinkDraft.trimmingCharacters(in: .whitespacesAndNewlines) !=
+            state.globalCopyQueueLink
+    }
+
+    private func dismissQueueKeyboard() {
+        isQueueLinkFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
     }
 
     private var googleSection: some View {
@@ -159,7 +313,7 @@ struct SettingsView: View {
             Button("Back up now") {
                 Task { await state.backupNow(context: context) }
             }
-            .disabled(!auth.isSignedIn || sources.isEmpty)
+            .disabled(!auth.isSignedIn || (sources.isEmpty && !state.hasGlobalCopyQueueSheet))
 
             if let lastBackupAt = state.lastBackupAt {
                 LabeledContent("Last backup", value: lastBackupAt.formatted())
@@ -169,7 +323,7 @@ struct SettingsView: View {
                 confirmDeleteBackup = true
             }
             .disabled(!auth.isSignedIn)
-            Text("Only account, assignment, and status metadata is backed up. Videos and credentials are never included.")
+            Text("Account settings, video status, copy-queue text, and copy history are backed up. Videos and credentials are never included.")
                 .font(.footnote)
                 .foregroundStyle(TrackerPalette.muted)
         } header: {
@@ -215,7 +369,7 @@ struct SettingsView: View {
             }
             LabeledContent("Analytics", value: "On-device only")
             LabeledContent("Advertising", value: "None")
-            LabeledContent("External account login", value: "Not used")
+            LabeledContent("Google authentication", value: "System sign-in")
         } header: {
             TrackerSectionLabel(title: "Privacy posture")
         }
@@ -273,12 +427,12 @@ private struct PrivacyView: View {
     var body: some View {
         List {
             Section {
-                Text("Video status, daily assignments, account settings, and audit history are stored in the app’s private SwiftData container.")
+                Text("Video status, daily assignments, account settings, copy-queue text, and audit history are stored in the app’s private SwiftData container.")
             } header: {
                 TrackerSectionLabel(title: "On this iPhone")
             }
             Section {
-                Text("Social Media Video Tracker reads folder metadata and video files you can access. A small JSON recovery backup is stored in Google Drive’s hidden app-data folder.")
+                Text("Social Media Video Tracker reads selected folder metadata, video files, and the Copy Paste/Queue Sheet. The hidden JSON recovery backup includes tracker metadata and cached copy-queue text, but never video files or credentials.")
             } header: {
                 TrackerSectionLabel(title: "Google Drive")
             }

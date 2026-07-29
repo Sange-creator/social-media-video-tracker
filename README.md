@@ -4,7 +4,7 @@ A local-first iPhone app for planning, downloading, and tracking social-media vi
 
 The app connects only to the Drive folders you select. Each folder can be associated with a different content account, given its own daily quota, and tracked independently. It does not automate publishing or require a backend server.
 
-## App preview
+## Product preview
 
 <p align="center">
   <img src="docs/screenshots/connect.png" alt="Connect a selected Google Drive folder" width="30%" />
@@ -14,6 +14,8 @@ The app connects only to the Drive folders you select. Each folder can be associ
 
 <p align="center"><sub>Connect selected folders · Plan daily downloads · Keep a permanent history</sub></p>
 
+<p align="center"><sub><em>Conceptual product visuals generated to explain the workflow; the installed app is the source of truth.</em></sub></p>
+
 ## Core workflow
 
 1. Sign in with the Google account that can access the required Drive folder.
@@ -22,7 +24,8 @@ The app connects only to the Drive folders you select. Each folder can be associ
 4. Let the app create a daily set of unused suggestions, or choose a different unused video manually.
 5. Tap a video to stream a preview directly from Drive.
 6. Download the original file to Photos. The tracker marks it completed only after the save succeeds.
-7. Review daily, per-account, and all-time activity in Analytics.
+7. Paste titles and hashtags into the shared Google Sheet and copy them from the app.
+8. Review daily, per-account, and all-time activity in Analytics.
 
 Suggestions that are not completed can carry forward. Completed videos remain in history and are excluded from future suggestions, even when a Drive filename changes.
 
@@ -31,7 +34,8 @@ Suggestions that are not completed can carry forward. Completed videos remain in
 ### Google Drive connections
 
 - Uses the real Google Sign-In flow.
-- Supports more than one Google account.
+- Supports tracked folders from more than one Google account by switching the
+  active Google login; one Google account is active at a time.
 - Connects only folders explicitly added by the user; it does not scan the entire Drive.
 - Accepts standard shared-folder links, folder IDs, and resource keys.
 - Tracks nested folders and displays each video's folder path.
@@ -61,6 +65,22 @@ Suggestions that are not completed can carry forward. Completed videos remain in
 - Marks a video completed only after PhotoKit confirms the save.
 - Supports cancellation, retry, re-download, and manual **Already Downloaded** completion.
 - Records immutable history events for downloads, replacements, corrections, and resets.
+- Provides a direct Library download button for unused videos without replacing Today suggestions.
+
+### Title and hashtag copy queue
+
+- Uses one global Google Sheet per Google login across the managed accounts
+  available to that login.
+- Connects the global queue by its Google Sheet link, so the Sheet can live
+  anywhere the signed-in Google account can access.
+- Keeps the last validated Sheet active while a replacement URL is being edited.
+- Stores a separate Sheet connection for each Google login used on the device.
+- Treats Column A as the exact title-and-hashtag text to copy.
+- Shows the newest uncopied row first and refreshes while the queue is open.
+- Preserves commas, quotation marks, emojis, hashtags, Unicode, and multiline cells.
+- Tracks Copy, Copy Again, Mark Uncopied, content changes, and removed Drive entries.
+- Keeps copied history on-device and includes it in the metadata backup.
+- Shows the next uncopied entry and the full global queue from Today.
 
 ### Analytics
 
@@ -105,7 +125,7 @@ iOS limits the number of pending local notifications, so the app schedules the n
 - SwiftData is the authoritative on-device database.
 - Routine synchronization and backup run without success alerts.
 - Important errors appear as a temporary bottom banner rather than a blocking dialog.
-- A metadata-only JSON backup can be stored in Google Drive's hidden `appDataFolder`.
+- A JSON backup containing tracker metadata and cached copy-queue text can be stored in Google Drive's hidden `appDataFolder`.
 - Reauthentication does not erase local tracking history.
 - A corrupt or unavailable backup never overwrites valid local data.
 - Google tokens are handled by Google Sign-In and stored securely in the iOS Keychain.
@@ -211,6 +231,24 @@ A free Apple Personal Team can install the app on a personal iPhone, but the pro
 
 Repeat the connection process when another folder belongs to a different Google account.
 
+## Copy queue setup
+
+Create one Google Sheet anywhere in Google Drive. It does not need to be
+inside an account's tracked video folder.
+
+In the queue Sheet:
+
+1. Optionally put `Content` in cell A1.
+2. Paste one complete title-and-hashtag block into each cell in Column A.
+3. Keep adding new entries downward; the app treats the highest occupied row number as newest.
+4. Copy the Sheet's sharing URL.
+5. Paste the URL from **Today → Global Copy Queue** or
+   **Settings → Global Copy Queue**, then connect it.
+6. Tap **Copy**. The exact cell content is placed on the iPhone clipboard and recorded as copied.
+
+The connected Google account must have permission to view the Sheet. The app
+cannot detect whether clipboard text is later pasted into another application.
+
 ## Tests
 
 Run the unit tests with an available simulator:
@@ -224,7 +262,10 @@ xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-The test suite covers Drive-link parsing, stable file identity, quota allocation, carry-over, shortages, manual selection, download deduplication, state transitions, and backup restoration.
+The test suite covers Drive-link parsing, stable file identity, quota allocation,
+carry-over, shortages, manual selection, download deduplication, state
+transitions, copy-queue CSV parsing, multiline and Unicode content, malformed
+responses, and backup restoration.
 
 ## Project structure
 
@@ -275,7 +316,7 @@ DriveTracker/
 ## Privacy
 
 - Tracker data and analytics remain on the device.
-- The optional Drive backup contains metadata only—never video files, Google tokens, or social-media credentials.
+- The optional Drive backup contains tracker metadata and cached copy-queue text—never video files, Google tokens, or social-media credentials.
 - Videos are transferred directly between Google Drive, the app, and Photos.
 - The app does not request App Tracking Transparency permission.
 - The app includes [`PrivacyInfo.xcprivacy`](DriveTracker/PrivacyInfo.xcprivacy).

@@ -194,7 +194,7 @@ struct AssignmentEngine {
     }
 
     func markDownloadStarted(_ video: VideoAsset, context: ModelContext) throws {
-        guard video.status == .assigned else { return }
+        guard video.status == .available || video.status == .assigned else { return }
         record(.downloadStarted, for: video, context: context)
         video.updatedAt = .now
         try context.save()
@@ -206,7 +206,11 @@ struct AssignmentEngine {
         at date: Date = .now,
         context: ModelContext
     ) throws {
-        guard video.status == .assigned || video.status == .downloaded else { return }
+        guard
+            video.status == .available ||
+            video.status == .assigned ||
+            video.status == .downloaded
+        else { return }
         video.downloadedAt = video.downloadedAt ?? date
         video.photoLocalIdentifier = photoIdentifier
         video.isMissingFromPhotos = false
@@ -224,7 +228,11 @@ struct AssignmentEngine {
         at date: Date = .now,
         context: ModelContext
     ) throws {
-        guard video.status == .assigned || video.status == .downloaded else { return }
+        guard
+            video.status == .available ||
+            video.status == .assigned ||
+            video.status == .downloaded
+        else { return }
         video.downloadedAt = video.downloadedAt ?? date
         video.uploadedAt = date
         video.photoLocalIdentifier = photoIdentifier

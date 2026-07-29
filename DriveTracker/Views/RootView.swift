@@ -31,14 +31,27 @@ struct RootView: View {
                         .padding(.bottom, hasConfiguredAccount ? 70 : 14)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .allowsHitTesting(false)
+                } else if let message = state.toastMessage {
+                    ToastMessageBanner(message: message)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, hasConfiguredAccount ? 70 : 14)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .allowsHitTesting(false)
                 }
             }
             .animation(.easeOut(duration: 0.22), value: state.errorMessage)
+            .animation(.easeOut(duration: 0.22), value: state.toastMessage)
             .task(id: state.errorMessage) {
                 guard let message = state.errorMessage else { return }
                 try? await Task.sleep(for: .seconds(6))
                 guard !Task.isCancelled, state.errorMessage == message else { return }
                 state.errorMessage = nil
+            }
+            .task(id: state.toastMessage) {
+                guard let message = state.toastMessage else { return }
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, state.toastMessage == message else { return }
+                state.toastMessage = nil
             }
             .tint(TrackerPalette.accent)
             .preferredColorScheme(.dark)
@@ -72,6 +85,30 @@ struct RootView: View {
 
     private var hasConfiguredAccount: Bool {
         accounts.contains { $0.isConfigured }
+    }
+}
+
+private struct ToastMessageBanner: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(TrackerPalette.success)
+            Text(message)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(.ultraThinMaterial)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(TrackerPalette.success.opacity(0.30), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
     }
 }
 

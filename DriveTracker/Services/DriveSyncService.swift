@@ -23,9 +23,18 @@ final class DriveSyncService {
         let rootItem = try await api.item(id: root.folderID, resourceKey: root.resourceKey)
         guard rootItem.isFolder else { throw DriveLinkError.invalidFolderLink }
 
-        let allVideos = try context.fetch(FetchDescriptor<VideoAsset>())
+        let googleUserID = account.googleUserID
+        let accountFolderID = root.folderID
+        let accountVideos = try context.fetch(
+            FetchDescriptor<VideoAsset>(
+                predicate: #Predicate<VideoAsset> { video in
+                    video.googleUserID == googleUserID &&
+                    video.accountFolderID == accountFolderID
+                }
+            )
+        )
         let existingVideoByKey = Dictionary(
-            uniqueKeysWithValues: allVideos.map { ($0.identityKey, $0) }
+            uniqueKeysWithValues: accountVideos.map { ($0.identityKey, $0) }
         )
         let scanTime = Date.now
         var seenVideoKeys = Set<String>()
@@ -48,19 +57,39 @@ final class DriveSyncService {
             )
             guard seenVideoKeys.insert(key).inserted else { continue }
             if let video = existingVideoByKey[key] {
-                video.name = item.name
-                video.folderPath = located.folderPath
-                video.mimeType = item.effectiveMimeType
-                video.resourceKey = item.effectiveResourceKey
-                video.size = item.sizeValue
-                video.checksum = item.md5Checksum
-                video.driveModifiedAt = item.modifiedDate
-                video.thumbnailLink = item.thumbnailLink
-                video.lastSeenAt = scanTime
-                video.isMissingFromDrive = false
-                video.canDownload = item.capabilities?.canDownload ?? true
-                video.account = account
-                video.updatedAt = scanTime
+                let canDownload = item.capabilities?.canDownload ?? true
+                let metadataChanged =
+                    video.name != item.name ||
+                    video.folderPath != located.folderPath ||
+                    video.mimeType != item.effectiveMimeType ||
+                    video.resourceKey != item.effectiveResourceKey ||
+                    video.size != item.sizeValue ||
+                    video.checksum != item.md5Checksum ||
+                    video.driveModifiedAt != item.modifiedDate ||
+                    video.thumbnailLink != item.thumbnailLink ||
+                    video.isMissingFromDrive ||
+                    video.canDownload != canDownload ||
+                    video.account?.id != account.id
+                let refreshLastSeen =
+                    scanTime.timeIntervalSince(video.lastSeenAt) >= 86_400
+
+                if metadataChanged || refreshLastSeen {
+                    video.name = item.name
+                    video.folderPath = located.folderPath
+                    video.mimeType = item.effectiveMimeType
+                    video.resourceKey = item.effectiveResourceKey
+                    video.size = item.sizeValue
+                    video.checksum = item.md5Checksum
+                    video.driveModifiedAt = item.modifiedDate
+                    video.thumbnailLink = item.thumbnailLink
+                    video.lastSeenAt = scanTime
+                    video.isMissingFromDrive = false
+                    video.canDownload = canDownload
+                    video.account = account
+                    if metadataChanged {
+                        video.updatedAt = scanTime
+                    }
+                }
             } else {
                 let video = VideoAsset(
                     driveFileID: item.effectiveID,
@@ -82,10 +111,7 @@ final class DriveSyncService {
             }
         }
 
-        for video in allVideos where
-            video.account?.id == account.id &&
-            !seenVideoKeys.contains(video.identityKey)
-        {
+        for video in accountVideos where !seenVideoKeys.contains(video.identityKey) {
             video.isMissingFromDrive = true
             video.updatedAt = scanTime
         }

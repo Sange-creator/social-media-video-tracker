@@ -29,6 +29,22 @@ final class PhotoLibraryService {
         ).firstObject != nil
     }
 
+    func existingAssetIdentifiers(_ identifiers: [String]) -> Set<String>? {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return nil }
+        guard !identifiers.isEmpty else { return [] }
+
+        let result = PHAsset.fetchAssets(
+            withLocalIdentifiers: identifiers,
+            options: nil
+        )
+        var existing = Set<String>()
+        result.enumerateObjects { asset, _, _ in
+            existing.insert(asset.localIdentifier)
+        }
+        return existing
+    }
+
     func saveVideo(at fileURL: URL, accountName: String) async throws -> String? {
         let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         guard status == .authorized || status == .limited else {

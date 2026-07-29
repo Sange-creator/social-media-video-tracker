@@ -230,7 +230,7 @@ struct VideoThumbnailView: View {
             if let image {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
             } else {
                 Image(systemName: "film")
                     .font(.title3.weight(.medium))

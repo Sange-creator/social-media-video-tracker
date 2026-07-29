@@ -109,12 +109,20 @@ final class TikTokAccount {
     var isConfigured: Bool = true
     var iconSymbol: String = "folder.fill"
     var iconColorHex: String = "#4F46E5"
+    var copyQueueFolderID: String?
+    var copyQueueSheetID: String?
+    var copyQueueSheetResourceKey: String?
+    var copyQueueLastSyncedAt: Date?
+    var copyQueueIssue: String?
 
     @Relationship(deleteRule: .cascade, inverse: \VideoAsset.account)
     var videos: [VideoAsset]
 
     @Relationship(deleteRule: .cascade, inverse: \DailyAssignment.account)
     var assignments: [DailyAssignment]
+
+    @Relationship(deleteRule: .cascade, inverse: \CopyEntry.account)
+    var copyEntries: [CopyEntry]
 
     init(
         id: UUID = UUID(),
@@ -152,6 +160,7 @@ final class TikTokAccount {
         self.iconColorHex = iconColorHex ?? defaultIcon.colorHex
         self.videos = []
         self.assignments = []
+        self.copyEntries = []
     }
 
     var outstandingCount: Int {
@@ -168,6 +177,14 @@ final class TikTokAccount {
 
     var missingCount: Int {
         videos.filter(\.isMissingFromDrive).count
+    }
+
+    var activeCopyEntries: [CopyEntry] {
+        copyEntries.filter { !$0.isMissingFromDrive }
+    }
+
+    var uncopiedCount: Int {
+        activeCopyEntries.filter { $0.copiedAt == nil }.count
     }
 }
 
@@ -236,7 +253,7 @@ enum AccountIconCatalog {
         }
         return Style(
             symbol: symbol,
-            colorHex: colors[abs(stableValue) % colors.count]
+            colorHex: colors[Int(stableValue.magnitude % UInt(colors.count))]
         )
     }
 }
