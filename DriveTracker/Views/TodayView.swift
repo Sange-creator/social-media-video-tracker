@@ -254,20 +254,21 @@ private struct AccountTodaySection: View {
             }
             .padding(15)
 
-            HStack(spacing: 9) {
+            HStack(spacing: 10) {
+                Button {
+                    Task { await state.downloadAllAssigned(for: account, context: context) }
+                } label: {
+                    Label("Download all", systemImage: "arrow.down.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+
                 Button {
                     showManualPicker = true
                 } label: {
                     Label("Choose My Own", systemImage: "hand.tap.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
-
-                Button {
-                    state.shuffleSuggestions(for: account, context: context)
-                } label: {
-                    Label("Shuffle", systemImage: "shuffle")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -279,9 +280,8 @@ private struct AccountTodaySection: View {
             if shortage > 0 {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                    Text("SHORT \(shortage) UNUSED VIDEO\(shortage == 1 ? "" : "S")")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.7)
+                    Text("\(shortage) unused video\(shortage == 1 ? "" : "s") short")
+                        .font(.caption.weight(.semibold))
                     Spacer()
                 }
                 .foregroundStyle(TrackerPalette.warning)
@@ -393,22 +393,19 @@ private struct ManualVideoPickerView: View {
 
                                 HStack(spacing: 10) {
                                     Button {
-                                        Task {
-                                            state.dismissMessages()
-                                            await state.chooseAndDownload(video, context: context)
-                                            if state.errorMessage == nil { dismiss() }
+                                        if state.isDownloading(video) {
+                                            state.cancelDownload(video)
+                                        } else {
+                                            state.startParallelDownload(video, context: context)
                                         }
                                     } label: {
                                         Label(
-                                            state.downloadIdentity == video.identityKey
-                                                ? "Downloading…"
-                                                : "Download Now",
-                                            systemImage: "arrow.down.circle.fill"
+                                            state.isDownloading(video) ? "Cancel Download" : "Download Now",
+                                            systemImage: state.isDownloading(video) ? "xmark.circle.fill" : "arrow.down.circle.fill"
                                         )
-                                            .frame(maxWidth: .infinity)
+                                        .frame(maxWidth: .infinity)
                                     }
-                                    .buttonStyle(TrackerActionButtonStyle(kind: .primary))
-                                    .disabled(state.downloadIdentity != nil)
+                                    .buttonStyle(TrackerActionButtonStyle(kind: state.isDownloading(video) ? .secondary : .primary))
                                 }
 
                                 Button {
@@ -449,7 +446,7 @@ private struct TodayVideoRow: View {
     @State private var showPreview = false
 
     private var isDownloading: Bool {
-        state.downloadIdentity == video.identityKey
+        state.isDownloading(video)
     }
 
     var body: some View {
@@ -486,15 +483,10 @@ private struct TodayVideoRow: View {
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(TrackerPalette.accent)
                     }
-                    HStack(spacing: 9) {
+                    HStack(spacing: 6) {
                         StatusPill(status: video.status)
-                        if let size = video.size {
-                            Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(TrackerPalette.muted)
-                        }
                         if video.isMissingFromDrive {
-                            Text("MISSING")
+                            Text("Missing")
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(TrackerPalette.danger)
                         }
@@ -508,17 +500,33 @@ private struct TodayVideoRow: View {
                 showPreview = true
             }
 
-            if isDownloading,
-               let progress = state.downloads.progressByIdentity[video.identityKey] {
-                ProgressView(value: progress.fraction) {
-                    Text("DOWNLOADING")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.8)
-                } currentValueLabel: {
-                    Text(progress.fraction, format: .percent.precision(.fractionLength(0)))
-                        .font(.caption.monospacedDigit())
+            if isDownloading {
+                VStack(spacing: 6) {
+                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                        let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
+                        let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
+                        Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(TrackerPalette.accent)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        Text("Connecting background download…")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(TrackerPalette.muted)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+
+                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                        ProgressView(value: progress.fraction)
+                            .tint(TrackerPalette.accent)
+                    } else {
+                        ProgressView()
+                            .tint(TrackerPalette.accent)
+                    }
                 }
-                .tint(TrackerPalette.accent)
+                .padding(.vertical, 4)
             }
 
             actionRow
@@ -586,14 +594,24 @@ private struct TodayVideoRow: View {
 
     @ViewBuilder
     private var assignedActionButtons: some View {
-        Button {
-            Task { await state.download(video, context: context) }
-        } label: {
-            Label("Download", systemImage: "arrow.down")
-                .frame(maxWidth: .infinity)
+        if isDownloading {
+            Button {
+                state.cancelDownload(video)
+            } label: {
+                Label("Cancel Download", systemImage: "xmark.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+        } else {
+            Button {
+                state.startParallelDownload(video, context: context)
+            } label: {
+                Label("Download", systemImage: "arrow.down")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+            .disabled(video.isMissingFromDrive || !video.canDownload)
         }
-        .buttonStyle(TrackerActionButtonStyle(kind: .primary))
-        .disabled(isDownloading || video.isMissingFromDrive || !video.canDownload)
 
         Button {
             state.markCompletedOutsideApp(video, context: context)

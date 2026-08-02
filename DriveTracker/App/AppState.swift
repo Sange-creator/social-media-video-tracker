@@ -17,7 +17,8 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var toastMessage: String?
     @Published var lastSyncAt: Date?
-    @Published var downloadIdentity: String?
+    @Published private(set) var activeDownloadIdentities: Set<String> = []
+    private var activeDownloadTasks: [String: Task<Void, Never>] = [:]
     @Published private(set) var reminderTimeZoneID: String
     @Published private(set) var globalCopyQueueLastSyncedAt: Date? {
         didSet { defaults.set(globalCopyQueueLastSyncedAt, forKey: Keys.globalCopyQueueLastSyncedAt) }
@@ -454,13 +455,21 @@ final class AppState: ObservableObject {
         await download(video, context: context)
     }
 
+    func isDownloading(_ identityKey: String) -> Bool {
+        activeDownloadIdentities.contains(identityKey)
+    }
+
+    func isDownloading(_ video: VideoAsset) -> Bool {
+        activeDownloadIdentities.contains(video.identityKey)
+    }
+
     func download(_ video: VideoAsset, context: ModelContext) async {
-        guard downloadIdentity == nil else {
-            errorMessage = "Another video is already downloading."
-            return
+        guard !activeDownloadIdentities.contains(video.identityKey) else { return }
+        activeDownloadIdentities.insert(video.identityKey)
+        defer {
+            activeDownloadIdentities.remove(video.identityKey)
+            activeDownloadTasks.removeValue(forKey: video.identityKey)
         }
-        downloadIdentity = video.identityKey
-        defer { downloadIdentity = nil }
         do {
             guard auth.userID == video.googleUserID else {
                 throw DriveAssociationError.wrongGoogleAccount(video.account?.googleEmail)
@@ -493,9 +502,31 @@ final class AppState: ObservableObject {
         }
     }
 
+    func startParallelDownload(_ video: VideoAsset, context: ModelContext) {
+        guard !activeDownloadIdentities.contains(video.identityKey) else { return }
+        let task = Task {
+            await download(video, context: context)
+        }
+        activeDownloadTasks[video.identityKey] = task
+    }
+
+    func downloadAllAssigned(for account: TikTokAccount, context: ModelContext) async {
+        let assignedVideos = account.videos.filter {
+            ($0.status == .assigned || $0.status == .available) &&
+            !$0.isMissingFromDrive &&
+            $0.canDownload &&
+            !activeDownloadIdentities.contains($0.identityKey)
+        }
+        for video in assignedVideos {
+            startParallelDownload(video, context: context)
+        }
+    }
+
     func cancelDownload(_ video: VideoAsset) {
-        guard downloadIdentity == video.identityKey else { return }
         downloads.cancel(identity: video.identityKey)
+        activeDownloadTasks[video.identityKey]?.cancel()
+        activeDownloadTasks.removeValue(forKey: video.identityKey)
+        activeDownloadIdentities.remove(video.identityKey)
     }
 
     func syncGlobalCopyQueue(
@@ -636,12 +667,12 @@ final class AppState: ObservableObject {
     }
 
     func redownload(_ video: VideoAsset, context: ModelContext) async {
-        guard downloadIdentity == nil else {
-            errorMessage = "Another video is already downloading."
-            return
+        guard !activeDownloadIdentities.contains(video.identityKey) else { return }
+        activeDownloadIdentities.insert(video.identityKey)
+        defer {
+            activeDownloadIdentities.remove(video.identityKey)
+            activeDownloadTasks.removeValue(forKey: video.identityKey)
         }
-        downloadIdentity = video.identityKey
-        defer { downloadIdentity = nil }
         do {
             guard auth.userID == video.googleUserID else {
                 throw DriveAssociationError.wrongGoogleAccount(video.account?.googleEmail)

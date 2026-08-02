@@ -107,6 +107,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
             recoveryHandler(identity, URL(fileURLWithPath: path))
         }
     }
+    private var lastProgressUpdateByIdentity: [String: Date] = [:]
 }
 
 extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegate {
@@ -117,8 +118,15 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
         totalBytesWritten: Int64,
         totalBytesExpectedToWrite: Int64
     ) {
+        guard let identity = downloadTask.taskDescription else { return }
+        let now = Date()
         Task { @MainActor in
-            guard let identity = downloadTask.taskDescription else { return }
+            if let last = lastProgressUpdateByIdentity[identity],
+               now.timeIntervalSince(last) < 0.1,
+               totalBytesWritten < totalBytesExpectedToWrite {
+                return
+            }
+            lastProgressUpdateByIdentity[identity] = now
             let fraction = totalBytesExpectedToWrite > 0
                 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
                 : 0

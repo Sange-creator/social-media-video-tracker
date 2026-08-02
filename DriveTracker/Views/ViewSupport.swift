@@ -21,8 +21,7 @@ struct StatusPill: View {
             Circle()
                 .fill(status.tint)
                 .frame(width: 6, height: 6)
-            Text(status.title.uppercased())
-                .tracking(0.8)
+            Text(status.title.capitalized)
         }
         .font(.caption2.weight(.bold))
         .foregroundStyle(status.tint)
@@ -43,12 +42,11 @@ struct FilterChip: View {
 
     var body: some View {
         HStack(spacing: 7) {
-            Text(title.uppercased()).lineLimit(1)
+            Text(title.capitalized).lineLimit(1)
             Image(systemName: selected ? "xmark" : "chevron.down")
                 .font(.system(size: 9, weight: .bold))
         }
         .font(.caption2.weight(.bold))
-        .tracking(0.5)
         .foregroundStyle(selected ? Color.white : TrackerPalette.muted)
         .padding(.horizontal, 11)
         .frame(height: 34)
@@ -67,9 +65,8 @@ struct TrackerSectionLabel: View {
 
     var body: some View {
         HStack {
-            Text(title.uppercased())
-                .font(.caption2.weight(.bold))
-                .tracking(1.5)
+            Text(title)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(TrackerPalette.muted)
             Spacer()
             if let trailing {
@@ -91,9 +88,8 @@ struct TrackerMetric: View {
             Text(value)
                 .font(.title2.monospacedDigit().weight(.bold))
                 .foregroundStyle(tint)
-            Text(label.uppercased())
-                .font(.system(size: 10, weight: .bold))
-                .tracking(1)
+            Text(label)
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(TrackerPalette.muted)
         }
     }

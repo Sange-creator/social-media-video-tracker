@@ -202,7 +202,7 @@ private struct LibraryVideoCard: View {
     let preview: () -> Void
 
     private var isDownloading: Bool {
-        state.downloadIdentity == video.identityKey
+        state.isDownloading(video)
     }
 
     var body: some View {
@@ -252,6 +252,36 @@ private struct LibraryVideoCard: View {
             .buttonStyle(.plain)
             .disabled(video.isMissingFromDrive || !video.canDownload)
 
+            if isDownloading {
+                VStack(spacing: 6) {
+                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                        let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
+                        let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
+                        Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(TrackerPalette.accent)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        Text("Connecting background download…")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(TrackerPalette.muted)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+
+                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                        ProgressView(value: progress.fraction)
+                            .tint(TrackerPalette.accent)
+                    } else {
+                        ProgressView()
+                            .tint(TrackerPalette.accent)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
+
             Divider().overlay(TrackerPalette.line)
 
             HStack(spacing: 0) {
@@ -260,7 +290,7 @@ private struct LibraryVideoCard: View {
                         if isDownloading {
                             state.cancelDownload(video)
                         } else {
-                            Task { await state.download(video, context: context) }
+                            state.startParallelDownload(video, context: context)
                         }
                     } label: {
                         HStack(spacing: 8) {
@@ -284,7 +314,6 @@ private struct LibraryVideoCard: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(
-                        (!isDownloading && state.downloadIdentity != nil) ||
                         video.isMissingFromDrive ||
                         !video.canDownload
                     )
@@ -450,7 +479,7 @@ struct VideoDetailView: View {
     @ViewBuilder
     private var actionButtons: some View {
         if video.status == .available || video.status == .assigned {
-            if state.downloadIdentity == video.identityKey {
+            if state.isDownloading(video) {
                 Button {
                     state.cancelDownload(video)
                 } label: {
@@ -460,14 +489,13 @@ struct VideoDetailView: View {
                 .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
             } else {
                 Button {
-                    Task { await state.download(video, context: context) }
+                    state.startParallelDownload(video, context: context)
                 } label: {
                     Label("Download to Photos", systemImage: "arrow.down.to.line")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(TrackerActionButtonStyle(kind: .primary))
                 .disabled(
-                    state.downloadIdentity != nil ||
                     video.isMissingFromDrive ||
                     !video.canDownload
                 )
@@ -587,14 +615,27 @@ struct VideoPreviewView: View {
     @State private var player: AVPlayer?
     @State private var isLoading = true
     @State private var loadError: String?
+    @State private var isPlaying = false
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 0
+    @State private var isEditingSlider = false
+    @State private var playbackRate: Float = 1.0
+    @State private var timeObserverToken: Any?
+
+    private let speeds: [Float] = [1.0, 1.25, 1.5, 2.0]
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 18) {
+            VStack(spacing: 16) {
                 if isLoading {
-                    ProgressView("Loading preview from Google Drive…")
-                        .tint(TrackerPalette.accent)
-                        .frame(maxHeight: .infinity)
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .tint(TrackerPalette.accent)
+                        Text("Connecting instant Drive stream…")
+                            .font(.subheadline)
+                            .foregroundStyle(TrackerPalette.muted)
+                    }
+                    .frame(maxHeight: .infinity)
                 } else if let loadError {
                     ContentUnavailableView(
                         "Preview unavailable",
@@ -603,9 +644,93 @@ struct VideoPreviewView: View {
                     )
                     .frame(maxHeight: .infinity)
                 } else if let player {
-                    VideoPlayer(player: player)
-                        .background(.black)
+                    VStack(spacing: 12) {
+                        VideoPlayer(player: player)
+                            .background(.black)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .frame(maxWidth: .infinity, minHeight: 380, maxHeight: 520)
+
+                        // Fast Range & Review Controls
+                        VStack(spacing: 10) {
+                            // Instant Range Slider / Scrub Bar
+                            VStack(spacing: 4) {
+                                Slider(
+                                    value: Binding(
+                                        get: { currentTime },
+                                        set: { newValue in
+                                            currentTime = newValue
+                                            seek(to: newValue)
+                                        }
+                                    ),
+                                    in: 0...max(duration, 1),
+                                    onEditingChanged: { editing in
+                                        isEditingSlider = editing
+                                    }
+                                )
+                                .tint(TrackerPalette.accent)
+
+                                HStack {
+                                    Text(formatTime(currentTime))
+                                        .font(.caption.monospacedDigit().weight(.semibold))
+                                        .foregroundStyle(TrackerPalette.accent)
+                                    Spacer()
+                                    Text(formatTime(duration))
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(TrackerPalette.muted)
+                                }
+                            }
+
+                            // Playback controls & Speed selector
+                            HStack(spacing: 16) {
+                                Button {
+                                    jump(by: -5)
+                                } label: {
+                                    Image(systemName: "gobackward.5")
+                                        .font(.title3)
+                                }
+
+                                Button {
+                                    togglePlayPause()
+                                } label: {
+                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                        .font(.system(size: 40))
+                                        .foregroundStyle(TrackerPalette.accent)
+                                }
+
+                                Button {
+                                    jump(by: 5)
+                                } label: {
+                                    Image(systemName: "goforward.5")
+                                        .font(.title3)
+                                }
+
+                                Spacer()
+
+                                Menu {
+                                    ForEach(speeds, id: \.self) { speed in
+                                        Button("\(String(format: "%.2fx", speed))") {
+                                            setSpeed(speed)
+                                        }
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "gauge.with.dots.needle.67percent")
+                                        Text("\(String(format: "%.1fx", playbackRate))")
+                                            .font(.caption.monospacedDigit().weight(.bold))
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(TrackerPalette.raised)
+                                    .clipShape(Capsule())
+                                }
+                            }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                        }
+                        .padding(12)
+                        .background(TrackerPalette.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 5) {
@@ -623,7 +748,7 @@ struct VideoPreviewView: View {
             }
             .padding(16)
             .trackerScreen()
-            .navigationTitle("Preview")
+            .navigationTitle("Instant Preview & Review")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -632,7 +757,7 @@ struct VideoPreviewView: View {
             }
             .task { await loadPreview() }
             .onDisappear {
-                player?.pause()
+                cleanupPlayer()
             }
         }
     }
@@ -642,11 +767,71 @@ struct VideoPreviewView: View {
         do {
             let item = try await state.previewPlayerItem(video)
             let streamPlayer = AVPlayer(playerItem: item)
+            // Disable waiting to start instant playback immediately
+            streamPlayer.automaticallyWaitsToMinimizeStalling = false
             player = streamPlayer
-            streamPlayer.play()
+            
+            // Add time observer for fast range review
+            let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
+            timeObserverToken = streamPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+                guard !isEditingSlider else { return }
+                currentTime = time.seconds
+                if let dur = streamPlayer.currentItem?.duration.seconds, !dur.isNaN, dur > 0 {
+                    duration = dur
+                }
+            }
+            
+            streamPlayer.playImmediately(atRate: playbackRate)
+            isPlaying = true
         } catch {
             loadError = error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func togglePlayPause() {
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.playImmediately(atRate: playbackRate)
+            isPlaying = true
+        }
+    }
+
+    private func jump(by seconds: Double) {
+        guard let player else { return }
+        let target = max(0, min(currentTime + seconds, duration))
+        seek(to: target)
+    }
+
+    private func seek(to seconds: Double) {
+        guard let player else { return }
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func setSpeed(_ speed: Float) {
+        playbackRate = speed
+        if isPlaying, let player {
+            player.rate = speed
+        }
+    }
+
+    private func cleanupPlayer() {
+        if let token = timeObserverToken, let player {
+            player.removeTimeObserver(token)
+        }
+        timeObserverToken = nil
+        player?.pause()
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard !seconds.isNaN && seconds >= 0 else { return "00:00" }
+        let totalSeconds = Int(seconds)
+        let mins = totalSeconds / 60
+        let secs = totalSeconds % 60
+        return String(format: "%02d:%02d", mins, secs)
     }
 }

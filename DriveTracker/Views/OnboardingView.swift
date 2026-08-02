@@ -67,11 +67,10 @@ struct OnboardingView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 9))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("REAL GOOGLE DRIVE · BUILD \(appBuildNumber)")
-                        .font(.caption2.weight(.bold))
-                        .tracking(1.5)
+                    Text("Google Drive · Build \(appBuildNumber)")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(TrackerPalette.accent)
-                    Text("SOCIAL VIDEO TRACKER")
+                    Text("Social Video Tracker")
                         .font(.headline.weight(.bold))
                 }
             }
