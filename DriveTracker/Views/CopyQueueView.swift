@@ -170,25 +170,24 @@ struct CopyEntryCard: View {
         VStack(alignment: .leading, spacing: 13) {
             HStack {
                 Label(
-                    entry.copiedAt == nil ? "READY TO COPY" : "COPIED",
+                    entry.copiedAt == nil ? "Ready to copy" : "Copied",
                     systemImage: entry.copiedAt == nil
                         ? "doc.on.clipboard"
                         : "checkmark.circle.fill"
                 )
-                .font(.caption2.weight(.bold))
-                .tracking(0.7)
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(
                     entry.copiedAt == nil ? TrackerPalette.warning : TrackerPalette.success
                 )
                 Spacer()
-                Text("ROW \(entry.sourceRow)")
-                    .font(.caption2.monospacedDigit().weight(.bold))
+                Text("Row \(entry.sourceRow)")
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(TrackerPalette.muted)
             }
 
             Text(entry.content)
                 .font(.body)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -230,9 +229,8 @@ struct CopyQueueSetupCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("ONE-TIME DRIVE SETUP", systemImage: "folder.badge.gearshape")
-                .font(.caption.weight(.bold))
-                .tracking(0.7)
+            Label("One-time Drive setup", systemImage: "folder.badge.gearshape")
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(TrackerPalette.warning)
             Text(message)
                 .font(.subheadline.weight(.semibold))
@@ -414,7 +412,7 @@ struct GlobalCopyQueueCard: View {
                 .disabled(queueLinkDraft.isEmpty)
             }
             .font(.caption.weight(.semibold))
-            .buttonStyle(.plain)
+            .buttonStyle(TrackerPressButtonStyle())
 
             Button {
                 connectQueue()

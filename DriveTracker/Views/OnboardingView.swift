@@ -23,7 +23,6 @@ struct OnboardingView: View {
                 LazyVStack(alignment: .leading, spacing: 20) {
                     masthead
                     setupProgress
-                    rulesCard
 
                     if !auth.isConfigured {
                         configurationNotice
@@ -34,7 +33,10 @@ struct OnboardingView: View {
                         sourceSetup
                         accountSetup
                     }
+
+                    rulesCard
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 18)
                 .padding(.top, 16)
                 .padding(.bottom, 48)
@@ -57,49 +59,53 @@ struct OnboardingView: View {
     }
 
     private var masthead: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 11) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
                 Image(systemName: "arrow.down.to.line.compact")
-                    .font(.system(size: 22, weight: .bold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
+                    .frame(width: 36, height: 36)
                     .background(TrackerPalette.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Google Drive · Build \(appBuildNumber)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(TrackerPalette.accent)
-                    Text("Social Video Tracker")
-                        .font(.headline.weight(.bold))
-                }
+                Text("Social Media Video Tracker")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
 
-            Text("Connect. Map. Track.")
-                .font(.system(size: 34, weight: .bold))
-                .tracking(-0.8)
+            Text("Set up your tracker")
+                .font(.title.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("You choose each Drive folder and account. Suggested videos stay unchanged until you replace them, and a successful download automatically marks the item completed.")
-                .font(.subheadline)
+            Text("Connect Google Drive, choose your folders, and set a daily target for each account.")
+                .font(.body)
                 .foregroundStyle(TrackerPalette.muted)
-                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private var appBuildNumber: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
     }
 
     private var setupProgress: some View {
-        HStack(spacing: 8) {
-            SetupBadge(number: 1, title: "Google", complete: auth.isSignedIn)
-            SetupBadge(number: 2, title: "Folder", complete: !sources.isEmpty)
-            SetupBadge(
-                number: 3,
-                title: "Accounts",
-                complete: accounts.contains { $0.isConfigured }
-            )
+        VStack(spacing: 8) {
+            HStack {
+                Text("Setup progress")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(completedSetupSteps) of 3")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(TrackerPalette.muted)
+            }
+            ProgressView(value: Double(completedSetupSteps), total: 3)
+                .tint(TrackerPalette.accent)
         }
+    }
+
+    private var completedSetupSteps: Int {
+        (auth.isSignedIn ? 1 : 0) +
+            (!sources.isEmpty ? 1 : 0) +
+            (accounts.contains { $0.isConfigured } ? 1 : 0)
     }
 
     private var rulesCard: some View {
@@ -126,9 +132,8 @@ struct OnboardingView: View {
 
     private var configurationNotice: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("GOOGLE LOGIN SETUP INCOMPLETE", systemImage: "key.horizontal.fill")
-                .font(.caption.weight(.bold))
-                .tracking(0.7)
+            Label("Google login setup incomplete", systemImage: "key.horizontal.fill")
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(TrackerPalette.warning)
             Text("This build still needs its Google iOS OAuth client ID. Until that is installed, a real Google login cannot open.")
                 .font(.subheadline)
@@ -142,14 +147,14 @@ struct OnboardingView: View {
     private var connectGoogleCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             TrackerSectionLabel(title: "Step 1 · Google account")
-            Text("Sign in with the Gmail account that can view the Drive folders. Social Media Video Tracker requests read-only file access and hidden backup storage.")
+            Text("Sign in with the Google account that can access your video folders.")
                 .font(.subheadline)
                 .foregroundStyle(TrackerPalette.muted)
 
             Button {
                 Task { await state.signIn(context: context) }
             } label: {
-                Label("CONNECT GOOGLE", systemImage: "person.crop.circle.badge.plus")
+                Label("Continue with Google", systemImage: "person.badge.key")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(TrackerActionButtonStyle(kind: .primary))
@@ -162,9 +167,8 @@ struct OnboardingView: View {
         HStack(spacing: 11) {
             Circle().fill(TrackerPalette.success).frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                Text("GOOGLE CONNECTED")
-                    .font(.caption2.weight(.bold))
-                    .tracking(0.9)
+                Text("Google connected")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(TrackerPalette.success)
                 Text(auth.email ?? "Google account")
                     .font(.subheadline.weight(.semibold))
@@ -192,7 +196,7 @@ struct OnboardingView: View {
             Button {
                 showFolderBrowser = true
             } label: {
-                Label("BROWSE DRIVE & SHARED FOLDERS", systemImage: "folder")
+                Label("Browse Drive and shared folders", systemImage: "folder")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(TrackerActionButtonStyle(kind: .primary))
@@ -202,13 +206,13 @@ struct OnboardingView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .lineLimit(2 ... 3)
-                .font(.subheadline.monospaced())
                 .padding(12)
-                .background(TrackerPalette.canvas)
+                .background(TrackerPalette.raised)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(TrackerPalette.line, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(TrackerPalette.line, lineWidth: 0.5)
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             Button {
                 Task {
@@ -223,7 +227,7 @@ struct OnboardingView: View {
                 }
             } label: {
                 Label(
-                    isResolvingLink ? "CHECKING FOLDER…" : "CONTINUE AND CHOOSE ACCOUNT",
+                    isResolvingLink ? "Checking folder…" : "Continue and choose account",
                     systemImage: "link.badge.plus"
                 )
                     .frame(maxWidth: .infinity)
@@ -280,7 +284,7 @@ struct OnboardingView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(account.folderName)
                                     .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(.primary)
                                 Text(account.isConfigured ? account.displayName : "Needs account setup")
                                     .font(.caption)
                                     .foregroundStyle(TrackerPalette.muted)
@@ -290,36 +294,16 @@ struct OnboardingView: View {
                                 .foregroundStyle(TrackerPalette.muted)
                         }
                         .padding(12)
-                        .background(TrackerPalette.canvas)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .background(TrackerPalette.raised)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrackerPressButtonStyle())
                 }
             }
             .trackerCard()
         }
     }
 
-}
-
-private struct SetupBadge: View {
-    let number: Int
-    let title: String
-    let complete: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: complete ? "checkmark.circle.fill" : "\(number).circle")
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .tracking(0.6)
-        }
-        .foregroundStyle(complete ? TrackerPalette.success : TrackerPalette.muted)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 9)
-        .background(TrackerPalette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 7))
-    }
 }
 
 private struct RuleRow: View {

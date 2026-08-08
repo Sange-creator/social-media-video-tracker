@@ -241,7 +241,9 @@ final class DriveAPIClient {
         }
         let highResolutionLink = link.replacingOccurrences(
             of: "=s\\d+($|-[^?]+)",
-            with: "=s480$1",
+            // Library cards are small; 320px is enough for a crisp preview
+            // while cutting thumbnail bandwidth and decode work substantially.
+            with: "=s320$1",
             options: .regularExpression
         )
         guard let url = URL(string: highResolutionLink) else {

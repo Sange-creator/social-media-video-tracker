@@ -22,22 +22,13 @@ struct AccountsView: View {
                     }
                     .padding(.bottom, 4)
 
-                    Button {
-                        showFolderBrowser = true
-                    } label: {
-                        Label("Add Account", systemImage: "plus.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(TrackerActionButtonStyle(kind: .primary))
-                    .padding(.bottom, 4)
-
                     ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
                         NavigationLink {
                             AccountEditorView(account: account)
                         } label: {
                             AccountRow(account: account, sequence: index + 1)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TrackerPressButtonStyle())
                     }
 
                     if accounts.isEmpty {
@@ -51,7 +42,7 @@ struct AccountsView: View {
                     }
                 }
                 .padding(16)
-                .padding(.bottom, 96)
+                .padding(.bottom, 24)
             }
             .trackerScreen()
             .navigationTitle("Accounts")
@@ -84,10 +75,10 @@ private struct AccountRow: View {
     let sequence: Int
 
     private var stateLabel: String {
-        if !account.isConfigured { return "SETUP" }
-        if account.isMissingFromDrive { return "MISSING" }
-        if account.isPaused { return "PAUSED" }
-        return "ACTIVE"
+        if !account.isConfigured { return "Set up" }
+        if account.isMissingFromDrive { return "Missing" }
+        if account.isPaused { return "Paused" }
+        return "Active"
     }
 
     private var stateColor: Color {
@@ -108,10 +99,10 @@ private struct AccountRow: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account.isConfigured ? account.displayName : "Configure account")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(.white)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
                     Text(account.folderName)
-                        .font(.caption.monospaced())
+                        .font(.caption)
                         .foregroundStyle(TrackerPalette.muted)
                         .lineLimit(1)
                 }
@@ -121,8 +112,7 @@ private struct AccountRow: View {
                 HStack(spacing: 6) {
                     Circle().fill(stateColor).frame(width: 6, height: 6)
                     Text(stateLabel)
-                        .font(.system(size: 9, weight: .bold))
-                        .tracking(0.8)
+                        .font(.caption.weight(.medium))
                 }
                 .foregroundStyle(stateColor)
 
@@ -349,8 +339,8 @@ private struct AccountFolderVideosView: View {
                             HStack {
                                 StatusPill(status: video.status)
                                 if video.isMissingFromDrive {
-                                    Text("MISSING FROM DRIVE")
-                                        .font(.caption2.weight(.bold))
+                                    Text("Missing from Drive")
+                                        .font(.caption.weight(.semibold))
                                         .foregroundStyle(TrackerPalette.danger)
                                 }
                             }

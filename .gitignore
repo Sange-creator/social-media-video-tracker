@@ -4,4 +4,4 @@ build/
 *.xcuserstate
 xcuserdata/
 .swiftpm/
-
+*.ipa

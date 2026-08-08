@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     @Published var errorMessage: String?
     @Published var toastMessage: String?
     @Published var lastSyncAt: Date?
+    @Published private(set) var analyticsSnapshot: AnalyticsSnapshot
     @Published private(set) var activeDownloadIdentities: Set<String> = []
     private var activeDownloadTasks: [String: Task<Void, Never>] = [:]
     @Published private(set) var reminderTimeZoneID: String
@@ -56,7 +57,9 @@ final class AppState: ObservableObject {
     private let assignmentEngine = AssignmentEngine()
     private let backupService: BackupService
     private let thumbnailCache = NSCache<NSString, UIImage>()
+    private var thumbnailTasks: [String: Task<UIImage?, Never>] = [:]
     private var backupTask: Task<Void, Never>?
+    private var analyticsTask: Task<Void, Never>?
     private var isBackingUp = false
     private var backupRequestedWhileRunning = false
     private var startupMaintenanceTask: Task<Void, Never>?
@@ -66,6 +69,7 @@ final class AppState: ObservableObject {
     private var activeCopyQueueGoogleUserID: String?
     private var hasStarted = false
     private var lastAutomaticSyncAttempt: Date?
+    private let automaticDriveRefreshInterval: TimeInterval = 45
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -84,6 +88,9 @@ final class AppState: ObservableObject {
         self.rootFolderID = defaults.string(forKey: Keys.rootFolderID) ?? ""
         self.rootResourceKey = defaults.string(forKey: Keys.rootResourceKey)
         self.lastSyncAt = defaults.object(forKey: Keys.lastSyncAt) as? Date
+        self.analyticsSnapshot = defaults.data(forKey: Keys.analyticsSnapshot)
+            .flatMap { try? JSONDecoder().decode(AnalyticsSnapshot.self, from: $0) }
+            ?? .empty
         self.globalCopyQueueLink = (defaults.string(forKey: Keys.globalCopyQueueLink) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         self.globalCopyQueueSheetID = defaults.string(forKey: Keys.globalCopyQueueSheetID) ?? ""
@@ -150,6 +157,7 @@ final class AppState: ObservableObject {
                 context: context
             )
             try ensureToday(context: context)
+            scheduleAnalyticsRefresh(context: context)
             if hasSources { scheduleStartupMaintenance(context: context) }
         } catch {
             errorMessage = error.localizedDescription
@@ -177,6 +185,7 @@ final class AppState: ObservableObject {
                 context: context
             )
             try ensureToday(context: context)
+            scheduleAnalyticsRefresh(context: context)
             if hasSources {
                 scheduleStartupMaintenance(context: context)
             }
@@ -203,6 +212,7 @@ final class AppState: ObservableObject {
                 context: context
             )
             try ensureToday(context: context)
+            scheduleAnalyticsRefresh(context: context)
             if hasSources {
                 scheduleStartupMaintenance(context: context)
             }
@@ -360,7 +370,7 @@ final class AppState: ObservableObject {
     func refreshFromDriveIfNeeded(context: ModelContext) async {
         guard hasStarted, auth.isSignedIn, !isWorking else { return }
         if let lastAutomaticSyncAttempt,
-           Date.now.timeIntervalSince(lastAutomaticSyncAttempt) < 300 {
+           Date.now.timeIntervalSince(lastAutomaticSyncAttempt) < automaticDriveRefreshInterval {
             return
         }
         guard
@@ -369,6 +379,21 @@ final class AppState: ObservableObject {
         else { return }
         lastAutomaticSyncAttempt = .now
         await sync(context: context, announce: false)
+    }
+
+    /// Poll while the app is usable so newly uploaded Drive videos normally
+    /// appear within one minute. iOS suspends this loop when the app is closed;
+    /// the scene-activation refresh catches up immediately on return.
+    func runForegroundDriveRefreshLoop(context: ModelContext) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .seconds(automaticDriveRefreshInterval))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await refreshFromDriveIfNeeded(context: context)
+        }
     }
 
     func ensureToday(context: ModelContext) throws {
@@ -466,6 +491,12 @@ final class AppState: ObservableObject {
     func download(_ video: VideoAsset, context: ModelContext) async {
         guard !activeDownloadIdentities.contains(video.identityKey) else { return }
         activeDownloadIdentities.insert(video.identityKey)
+        toastMessage = "Download started for \(video.name)"
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        await performReservedDownload(video, context: context)
+    }
+
+    private func performReservedDownload(_ video: VideoAsset, context: ModelContext) async {
         defer {
             activeDownloadIdentities.remove(video.identityKey)
             activeDownloadTasks.removeValue(forKey: video.identityKey)
@@ -491,21 +522,28 @@ final class AppState: ObservableObject {
                 photoIdentifier: photoID,
                 context: context
             )
-            statusMessage = "\(video.name) was downloaded and marked completed."
+            toastMessage = "Downloaded and completed • \(video.name)"
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             scheduleBackup(context: context)
             await scheduleDownloadNotifications(context: context)
         } catch {
             if !isCancellation(error) {
                 try? assignmentEngine.markDownloadFailed(video, error: error, context: context)
                 errorMessage = error.localizedDescription
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
     }
 
     func startParallelDownload(_ video: VideoAsset, context: ModelContext) {
         guard !activeDownloadIdentities.contains(video.identityKey) else { return }
+        // Reserve the identity synchronously so a fast double tap cannot create
+        // two background URLSession tasks before the first Task begins running.
+        activeDownloadIdentities.insert(video.identityKey)
+        toastMessage = "Download started for \(video.name)"
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let task = Task {
-            await download(video, context: context)
+            await performReservedDownload(video, context: context)
         }
         activeDownloadTasks[video.identityKey] = task
     }
@@ -527,6 +565,8 @@ final class AppState: ObservableObject {
         activeDownloadTasks[video.identityKey]?.cancel()
         activeDownloadTasks.removeValue(forKey: video.identityKey)
         activeDownloadIdentities.remove(video.identityKey)
+        toastMessage = "Download canceled"
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
 
     func syncGlobalCopyQueue(
@@ -703,7 +743,8 @@ final class AppState: ObservableObject {
                 )
             )
             try context.save()
-            statusMessage = "\(video.name) was downloaded again."
+            toastMessage = "Downloaded again • \(video.name)"
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             scheduleBackup(context: context)
         } catch {
             if !isCancellation(error) {
@@ -840,23 +881,42 @@ final class AppState: ObservableObject {
     }
 
     func thumbnailImage(for video: VideoAsset) async -> UIImage? {
-        let cacheKey = video.identityKey as NSString
+        let identity = video.identityKey
+        let cacheKey = identity as NSString
         if let cached = thumbnailCache.object(forKey: cacheKey) {
             return cached
         }
-        guard
-            auth.userID == video.googleUserID,
-            !video.isMissingFromDrive,
-            video.thumbnailLink != nil,
-            let data = try? await api.thumbnailData(for: video),
-            let image = UIImage(data: data)
-        else {
-            return nil
+
+        // SwiftUI can create the same row more than once while scrolling. Share
+        // one request instead of starting duplicate Drive downloads and image
+        // decodes for the same file.
+        if let existingTask = thumbnailTasks[identity] {
+            return await existingTask.value
         }
-        let imageCost = image.cgImage.map {
-            $0.bytesPerRow * $0.height
-        } ?? data.count
-        thumbnailCache.setObject(image, forKey: cacheKey, cost: imageCost)
+
+        let task = Task<UIImage?, Never> { [weak self] in
+            guard let self,
+                  self.auth.userID == video.googleUserID,
+                  !video.isMissingFromDrive,
+                  video.thumbnailLink != nil,
+                  let data = try? await self.api.thumbnailData(for: video)
+            else { return nil }
+
+            // UIImage decoding is CPU work. Keep it off the main actor so a
+            // scrolling Library never freezes while a thumbnail arrives.
+            let image = await Task.detached(priority: .utility) {
+                UIImage(data: data)
+            }.value
+            guard let image else { return nil }
+            let imageCost = image.cgImage.map {
+                $0.bytesPerRow * $0.height
+            } ?? data.count
+            self.thumbnailCache.setObject(image, forKey: cacheKey, cost: imageCost)
+            return image
+        }
+        thumbnailTasks[identity] = task
+        let image = await task.value
+        thumbnailTasks[identity] = nil
         return image
     }
 
@@ -899,11 +959,39 @@ final class AppState: ObservableObject {
 
     func scheduleBackup(context: ModelContext) {
         backupService.markDirty()
+        scheduleAnalyticsRefresh(context: context)
         backupTask?.cancel()
         backupTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, let self else { return }
             await self.backupNow(context: context)
+        }
+    }
+
+    /// Rebuild analytics in a private SwiftData context. The previous snapshot
+    /// remains visible until the new one is ready, so opening Analytics never
+    /// blocks a tab-selection animation.
+    func scheduleAnalyticsRefresh(context: ModelContext) {
+        guard let googleUserID = auth.userID else { return }
+        let container = context.container
+        analyticsTask?.cancel()
+        analyticsTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, let self else { return }
+            do {
+                let snapshot = try await AnalyticsSnapshotService.makeSnapshot(
+                    container: container,
+                    googleUserID: googleUserID
+                )
+                guard !Task.isCancelled, self.auth.userID == googleUserID else { return }
+                self.analyticsSnapshot = snapshot
+                if let data = try? JSONEncoder().encode(snapshot) {
+                    self.defaults.set(data, forKey: Keys.analyticsSnapshot)
+                }
+            } catch {
+                // Keep the last valid snapshot. Analytics is informative and
+                // should never surface a blocking error during normal use.
+            }
         }
     }
 
@@ -956,6 +1044,8 @@ final class AppState: ObservableObject {
             globalCopyQueueResourceKey = nil
             globalCopyQueueIssue = nil
             globalCopyQueueLastSyncedAt = nil
+            analyticsSnapshot = .empty
+            defaults.removeObject(forKey: Keys.analyticsSnapshot)
             clearStoredCopyQueueConfigurations()
             defaults.set(true, forKey: Keys.suppressAutomaticRestore)
             statusMessage = "Local tracking data deleted."
@@ -1149,7 +1239,8 @@ final class AppState: ObservableObject {
                 photoIdentifier: photoID,
                 context: context
             )
-            statusMessage = "The video was downloaded and marked completed."
+            toastMessage = "Downloaded and completed • \(video.name)"
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             scheduleBackup(context: context)
         } catch {
             errorMessage = "Background download recovery failed: \(error.localizedDescription)"
@@ -1177,12 +1268,13 @@ final class AppState: ObservableObject {
 
     private func scheduleStartupMaintenance(context: ModelContext) {
         startupMaintenanceTask?.cancel()
-        lastAutomaticSyncAttempt = .now
-        startupMaintenanceTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+        // Let the first frame and navigation become interactive before the
+        // initial Drive/Photos maintenance work begins.
+        lastAutomaticSyncAttempt = nil
+        startupMaintenanceTask = Task(priority: .utility) { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled, let self else { return }
-            self.verifyKnownPhotoCopies(context: context)
-            await self.sync(context: context, announce: false)
+            await self.refreshFromDriveIfNeeded(context: context)
         }
     }
 
@@ -1375,6 +1467,7 @@ final class AppState: ObservableObject {
         static let rootFolderID = "rootFolderID"
         static let rootResourceKey = "rootResourceKey"
         static let lastSyncAt = "lastSyncAt"
+        static let analyticsSnapshot = "analyticsSnapshotV1"
         static let requestedResetVerified = "requestedResetVerifiedV2"
         static let suppressAutomaticRestore = "suppressAutomaticRestore"
         static let globalCopyQueueLink = "globalCopyQueueLink"

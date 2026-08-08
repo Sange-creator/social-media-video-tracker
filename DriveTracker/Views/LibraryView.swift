@@ -1,6 +1,8 @@
 import AVKit
+import Combine
 import SwiftData
 import SwiftUI
+import UIKit
 
 struct LibraryView: View {
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
@@ -43,12 +45,12 @@ struct LibraryView: View {
                             } label: {
                                 LibraryAccountRow(account: account)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(TrackerPressButtonStyle())
                         }
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 96)
+                .padding(.bottom, 24)
             }
             .trackerScreen()
             .navigationTitle("Library")
@@ -73,8 +75,8 @@ private struct LibraryAccountRow: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account.displayName)
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(.white)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
                     Label(account.folderName, systemImage: "folder")
                         .font(.caption)
                         .foregroundStyle(TrackerPalette.muted)
@@ -154,7 +156,7 @@ private struct AccountLibraryView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 104)
+            .padding(.bottom, 24)
         }
         .trackerScreen()
         .navigationTitle(account.displayName)
@@ -218,7 +220,7 @@ private struct LibraryVideoCard: View {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(video.name)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .lineLimit(2)
 
                         StatusPill(status: video.status)
@@ -249,8 +251,8 @@ private struct LibraryVideoCard: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
-            .disabled(video.isMissingFromDrive || !video.canDownload)
+            .buttonStyle(TrackerPressButtonStyle())
+            .disabled(video.isMissingFromDrive)
 
             if isDownloading {
                 VStack(spacing: 6) {
@@ -312,7 +314,7 @@ private struct LibraryVideoCard: View {
                         .frame(height: 46)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrackerPressButtonStyle())
                     .disabled(
                         video.isMissingFromDrive ||
                         !video.canDownload
@@ -333,15 +335,15 @@ private struct LibraryVideoCard: View {
                         .frame(height: 46)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TrackerPressButtonStyle())
             }
         }
         .background(TrackerPalette.surface)
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(TrackerPalette.line, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(TrackerPalette.line, lineWidth: 0.5)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -363,7 +365,7 @@ struct VideoDetailView: View {
                 historyCard
             }
             .padding(16)
-            .padding(.bottom, 104)
+            .padding(.bottom, 24)
         }
         .trackerScreen()
         .navigationTitle(video.name)
@@ -400,8 +402,8 @@ struct VideoDetailView: View {
                 )
                 .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.plain)
-            .disabled(video.isMissingFromDrive || !video.canDownload)
+            .buttonStyle(TrackerPressButtonStyle())
+            .disabled(video.isMissingFromDrive)
 
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: "info.circle")
@@ -621,6 +623,12 @@ struct VideoPreviewView: View {
     @State private var isEditingSlider = false
     @State private var playbackRate: Float = 1.0
     @State private var timeObserverToken: Any?
+    @State private var volume: Double = 1.0
+    @State private var isMuted = false
+    @State private var audioRouteName = "iPhone"
+    @State private var temporaryPreviewURL: URL?
+    @State private var isUsingLocalPreview = false
+    @State private var isFallingBack = false
 
     private let speeds: [Float] = [1.0, 1.25, 1.5, 2.0]
 
@@ -628,13 +636,19 @@ struct VideoPreviewView: View {
         NavigationStack {
             VStack(spacing: 16) {
                 if isLoading {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .tint(TrackerPalette.accent)
-                        Text("Connecting instant Drive stream…")
-                            .font(.subheadline)
-                            .foregroundStyle(TrackerPalette.muted)
+                    ZStack {
+                        VideoThumbnailView(video: video, width: 220, height: 330)
+                            .opacity(0.62)
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .controlSize(.large)
+                                .tint(.white)
+                            Text("Preparing secure Drive stream…")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
                     }
+                    .frame(maxWidth: .infinity)
                     .frame(maxHeight: .infinity)
                 } else if let loadError {
                     ContentUnavailableView(
@@ -724,8 +738,46 @@ struct VideoPreviewView: View {
                                     .clipShape(Capsule())
                                 }
                             }
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                             .padding(.horizontal, 8)
+
+                            Divider().overlay(TrackerPalette.line)
+
+                            HStack(spacing: 12) {
+                                Button {
+                                    toggleMute()
+                                } label: {
+                                    Image(
+                                        systemName: isMuted || volume == 0
+                                            ? "speaker.slash.fill"
+                                            : "speaker.wave.2.fill"
+                                    )
+                                    .font(.title3)
+                                    .frame(width: 34, height: 34)
+                                }
+                                .buttonStyle(TrackerPressButtonStyle())
+                                .accessibilityLabel(isMuted ? "Unmute video" : "Mute video")
+
+                                Slider(value: $volume, in: 0...1)
+                                    .tint(TrackerPalette.accent)
+                                    .onChange(of: volume) { _, newValue in
+                                        player.volume = Float(newValue)
+                                        if newValue > 0, isMuted {
+                                            isMuted = false
+                                            player.isMuted = false
+                                        }
+                                    }
+
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text("Audio")
+                                        .font(.caption2)
+                                        .foregroundStyle(TrackerPalette.muted)
+                                    Text(audioRouteName)
+                                        .font(.caption2.weight(.semibold))
+                                        .lineLimit(1)
+                                }
+                                .frame(width: 72, alignment: .trailing)
+                            }
                         }
                         .padding(12)
                         .background(TrackerPalette.surface)
@@ -756,6 +808,27 @@ struct VideoPreviewView: View {
                 }
             }
             .task { await loadPreview() }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: .AVPlayerItemFailedToPlayToEndTime
+                )
+            ) { notification in
+                guard notification.object as? AVPlayerItem === player?.currentItem else {
+                    return
+                }
+                beginLocalFallback()
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: .AVPlayerItemDidPlayToEndTime
+                )
+            ) { notification in
+                guard notification.object as? AVPlayerItem === player?.currentItem else {
+                    return
+                }
+                isPlaying = false
+                currentTime = duration
+            }
             .onDisappear {
                 cleanupPlayer()
             }
@@ -764,29 +837,93 @@ struct VideoPreviewView: View {
 
     private func loadPreview() async {
         isLoading = true
+        loadError = nil
         do {
+            try configureAudioSession()
             let item = try await state.previewPlayerItem(video)
-            let streamPlayer = AVPlayer(playerItem: item)
-            // Disable waiting to start instant playback immediately
-            streamPlayer.automaticallyWaitsToMinimizeStalling = false
-            player = streamPlayer
-            
-            // Add time observer for fast range review
-            let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
-            timeObserverToken = streamPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-                guard !isEditingSlider else { return }
-                currentTime = time.seconds
-                if let dur = streamPlayer.currentItem?.duration.seconds, !dur.isNaN, dur > 0 {
-                    duration = dur
-                }
-            }
-            
-            streamPlayer.playImmediately(atRate: playbackRate)
-            isPlaying = true
+            try await validate(item)
+            installPlayer(item)
         } catch {
-            loadError = error.localizedDescription
+            await loadLocalFallback(streamError: error)
         }
         isLoading = false
+    }
+
+    private func validate(_ item: AVPlayerItem) async throws {
+        let playable = try await item.asset.load(.isPlayable)
+        guard playable else { throw VideoPreviewError.notPlayable }
+        if let loadedDuration = try? await item.asset.load(.duration),
+           loadedDuration.isNumeric,
+           loadedDuration.seconds > 0 {
+            duration = loadedDuration.seconds
+        }
+    }
+
+    private func installPlayer(_ item: AVPlayerItem) {
+        if let token = timeObserverToken, let player {
+            player.removeTimeObserver(token)
+        }
+        item.preferredForwardBufferDuration = isUsingLocalPreview ? 0 : 2
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        let streamPlayer = AVPlayer(playerItem: item)
+        streamPlayer.automaticallyWaitsToMinimizeStalling = !isUsingLocalPreview
+        streamPlayer.volume = Float(volume)
+        streamPlayer.isMuted = isMuted
+        player = streamPlayer
+
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        timeObserverToken = streamPlayer.addPeriodicTimeObserver(
+            forInterval: interval,
+            queue: .main
+        ) { time in
+            Task { @MainActor in
+                guard !isEditingSlider else { return }
+                currentTime = time.seconds
+                if let itemDuration = streamPlayer.currentItem?.duration.seconds,
+                   itemDuration.isFinite,
+                   itemDuration > 0 {
+                    duration = itemDuration
+                }
+                isPlaying = streamPlayer.timeControlStatus == .playing
+            }
+        }
+
+        streamPlayer.playImmediately(atRate: playbackRate)
+        isPlaying = true
+    }
+
+    private func beginLocalFallback() {
+        guard !isUsingLocalPreview, !isFallingBack else {
+            if isUsingLocalPreview {
+                loadError = player?.currentItem?.error?.localizedDescription
+                    ?? "The video file could not be played."
+            }
+            return
+        }
+        Task { await loadLocalFallback(streamError: player?.currentItem?.error) }
+    }
+
+    private func loadLocalFallback(streamError: Error?) async {
+        guard !isFallingBack else { return }
+        isFallingBack = true
+        isLoading = true
+        loadError = nil
+        player?.pause()
+        do {
+            let localURL = try await state.previewFile(video)
+            temporaryPreviewURL = localURL
+            isUsingLocalPreview = true
+            let item = AVPlayerItem(url: localURL)
+            try await validate(item)
+            installPlayer(item)
+        } catch {
+            loadError = error.localizedDescription.isEmpty
+                ? (streamError?.localizedDescription ?? "The preview could not be prepared.")
+                : error.localizedDescription
+            isPlaying = false
+        }
+        isLoading = false
+        isFallingBack = false
     }
 
     private func togglePlayPause() {
@@ -795,13 +932,34 @@ struct VideoPreviewView: View {
             player.pause()
             isPlaying = false
         } else {
+            if duration > 0, currentTime >= duration - 0.2 {
+                seek(to: 0)
+            }
             player.playImmediately(atRate: playbackRate)
             isPlaying = true
         }
     }
 
-    private func jump(by seconds: Double) {
+    private func toggleMute() {
         guard let player else { return }
+        isMuted.toggle()
+        player.isMuted = isMuted
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+    }
+
+    private func configureAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(
+            .playback,
+            mode: .moviePlayback,
+            options: [.allowAirPlay, .allowBluetoothA2DP]
+        )
+        try session.setActive(true)
+        audioRouteName = session.currentRoute.outputs.first?.portName ?? "iPhone"
+    }
+
+    private func jump(by seconds: Double) {
+        guard player != nil else { return }
         let target = max(0, min(currentTime + seconds, duration))
         seek(to: target)
     }
@@ -809,7 +967,8 @@ struct VideoPreviewView: View {
     private func seek(to seconds: Double) {
         guard let player else { return }
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        let tolerance = CMTime(seconds: 0.15, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance)
     }
 
     private func setSpeed(_ speed: Float) {
@@ -825,6 +984,14 @@ struct VideoPreviewView: View {
         }
         timeObserverToken = nil
         player?.pause()
+        if let temporaryPreviewURL {
+            try? FileManager.default.removeItem(at: temporaryPreviewURL)
+            self.temporaryPreviewURL = nil
+        }
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -833,5 +1000,13 @@ struct VideoPreviewView: View {
         let mins = totalSeconds / 60
         let secs = totalSeconds % 60
         return String(format: "%02d:%02d", mins, secs)
+    }
+}
+
+private enum VideoPreviewError: LocalizedError {
+    case notPlayable
+
+    var errorDescription: String? {
+        "Google Drive returned a video format that AVPlayer cannot preview."
     }
 }

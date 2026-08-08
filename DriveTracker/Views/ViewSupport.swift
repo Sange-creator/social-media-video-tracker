@@ -2,15 +2,15 @@ import SwiftUI
 import UIKit
 
 enum TrackerPalette {
-    static let canvas = Color(red: 0.035, green: 0.043, blue: 0.055)
-    static let surface = Color(red: 0.075, green: 0.09, blue: 0.11)
-    static let raised = Color(red: 0.105, green: 0.125, blue: 0.15)
-    static let line = Color.white.opacity(0.10)
-    static let muted = Color(red: 0.55, green: 0.59, blue: 0.65)
-    static let accent = Color(red: 0.27, green: 0.51, blue: 0.96)
-    static let success = Color(red: 0.24, green: 0.75, blue: 0.49)
-    static let warning = Color(red: 0.94, green: 0.62, blue: 0.24)
-    static let danger = Color(red: 0.95, green: 0.34, blue: 0.35)
+    static let canvas = Color(uiColor: .systemGroupedBackground)
+    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
+    static let raised = Color(uiColor: .tertiarySystemGroupedBackground)
+    static let line = Color(uiColor: .separator).opacity(0.45)
+    static let muted = Color(uiColor: .secondaryLabel)
+    static let accent = Color(uiColor: .systemBlue)
+    static let success = Color(uiColor: .systemGreen)
+    static let warning = Color(uiColor: .systemOrange)
+    static let danger = Color(uiColor: .systemRed)
 }
 
 struct StatusPill: View {
@@ -23,16 +23,11 @@ struct StatusPill: View {
                 .frame(width: 6, height: 6)
             Text(status.title.capitalized)
         }
-        .font(.caption2.weight(.bold))
+        .font(.caption.weight(.semibold))
         .foregroundStyle(status.tint)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 9)
         .padding(.vertical, 5)
-        .background(status.tint.opacity(0.08))
-        .overlay {
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(status.tint.opacity(0.26), lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .background(status.tint.opacity(0.12), in: Capsule())
     }
 }
 
@@ -46,16 +41,12 @@ struct FilterChip: View {
             Image(systemName: selected ? "xmark" : "chevron.down")
                 .font(.system(size: 9, weight: .bold))
         }
-        .font(.caption2.weight(.bold))
-        .foregroundStyle(selected ? Color.white : TrackerPalette.muted)
-        .padding(.horizontal, 11)
-        .frame(height: 34)
-        .background(selected ? TrackerPalette.accent : TrackerPalette.raised)
-        .overlay {
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(selected ? TrackerPalette.accent : TrackerPalette.line, lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .font(.subheadline.weight(.medium))
+        .foregroundStyle(selected ? Color.white : Color.primary)
+        .padding(.horizontal, 13)
+        .frame(height: 36)
+        .background(selected ? TrackerPalette.accent : TrackerPalette.surface, in: Capsule())
+        .overlay { Capsule().stroke(TrackerPalette.line, lineWidth: selected ? 0 : 0.5) }
     }
 }
 
@@ -66,12 +57,12 @@ struct TrackerSectionLabel: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(TrackerPalette.muted)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
             Spacer()
             if let trailing {
                 Text(trailing)
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .font(.subheadline.monospacedDigit())
                     .foregroundStyle(TrackerPalette.muted)
             }
         }
@@ -81,22 +72,22 @@ struct TrackerSectionLabel: View {
 struct TrackerMetric: View {
     let value: String
     let label: String
-    var tint: Color = .white
+    var tint: Color = .primary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(value)
-                .font(.title2.monospacedDigit().weight(.bold))
+                .font(.title3.monospacedDigit().weight(.semibold))
                 .foregroundStyle(tint)
             Text(label)
-                .font(.caption2.weight(.semibold))
+                .font(.footnote)
                 .foregroundStyle(TrackerPalette.muted)
         }
     }
 }
 
 struct TrackerActionButtonStyle: ButtonStyle {
-    enum Kind {
+    enum Kind: Equatable {
         case primary
         case secondary
         case quiet
@@ -109,20 +100,27 @@ struct TrackerActionButtonStyle: ButtonStyle {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(foreground)
             .padding(.horizontal, 14)
-            .frame(minHeight: 42)
-            .background(background.opacity(configuration.isPressed ? 0.72 : 1))
+            .frame(minHeight: 44)
+            .background(background.opacity(configuration.isPressed ? 0.78 : 1))
             .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(border, lineWidth: 0.5)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .sensoryFeedback(
+                .impact(flexibility: .soft, intensity: 0.65),
+                trigger: configuration.isPressed
+            ) { oldValue, newValue in
+                !oldValue && newValue
+            }
     }
 
     private var foreground: Color {
         switch kind {
         case .primary: .white
-        case .secondary: .white
+        case .secondary: .primary
         case .quiet: TrackerPalette.muted
         }
     }
@@ -130,7 +128,7 @@ struct TrackerActionButtonStyle: ButtonStyle {
     private var background: Color {
         switch kind {
         case .primary: TrackerPalette.accent
-        case .secondary: TrackerPalette.raised
+        case .secondary: Color(uiColor: .secondarySystemFill)
         case .quiet: .clear
         }
     }
@@ -143,15 +141,34 @@ struct TrackerActionButtonStyle: ButtonStyle {
     }
 }
 
+/// Gives card rows and icon-only controls the same unmistakable press response
+/// as native iOS controls without adding a permanent button background.
+struct TrackerPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
+            .sensoryFeedback(
+                .impact(flexibility: .soft, intensity: 0.45),
+                trigger: configuration.isPressed
+            ) { oldValue, newValue in
+                !oldValue && newValue
+            }
+    }
+}
+
 extension View {
     func trackerCard(padding cardPadding: CGFloat = 16) -> some View {
         padding(cardPadding)
-            .background(TrackerPalette.surface)
+            .background(
+                TrackerPalette.surface,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
             .overlay {
-                RoundedRectangle(cornerRadius: 13)
-                    .stroke(TrackerPalette.line, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(TrackerPalette.line, lineWidth: 0.5)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 13))
     }
 
     func trackerScreen() -> some View {
@@ -183,14 +200,13 @@ struct AccountIdentityIcon: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: size * 0.38, weight: .semibold))
+            .font(.system(size: size * 0.34, weight: .medium))
             .foregroundStyle(Color(hex: colorHex))
             .frame(width: size, height: size)
-            .background(Color(hex: colorHex).opacity(0.13))
-            .clipShape(RoundedRectangle(cornerRadius: size * 0.20, style: .continuous))
+            .background(Color(hex: colorHex).opacity(0.11))
+            .clipShape(Circle())
             .overlay {
-                RoundedRectangle(cornerRadius: size * 0.20, style: .continuous)
-                    .stroke(Color(hex: colorHex).opacity(0.42), lineWidth: 1)
+                Circle().stroke(Color(hex: colorHex).opacity(0.16), lineWidth: 0.5)
             }
             .overlay(alignment: .bottomTrailing) {
                 if let badge {
@@ -291,7 +307,7 @@ struct AccountIconPicker: View {
                                         )
                                 }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TrackerPressButtonStyle())
                     }
                 }
             }
@@ -319,7 +335,7 @@ struct AccountIconPicker: View {
                                 Circle().stroke(.white.opacity(colorHex == option ? 0.75 : 0.12), lineWidth: 2)
                             }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TrackerPressButtonStyle())
                 }
             }
         }

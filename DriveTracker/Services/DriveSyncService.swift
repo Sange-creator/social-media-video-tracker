@@ -39,6 +39,7 @@ final class DriveSyncService {
         let scanTime = Date.now
         var seenVideoKeys = Set<String>()
         var newVideos = 0
+        var hasPersistentChanges = false
 
         var visitedFolders = Set<String>()
         let locatedVideos = try await recursivelyListVideos(
@@ -48,7 +49,12 @@ final class DriveSyncService {
             visitedFolders: &visitedFolders
         )
 
-        for located in locatedVideos {
+        for (index, located) in locatedVideos.enumerated() {
+            // Large folders should never monopolize the main actor while the
+            // user is scrolling or changing tabs.
+            if index > 0, index.isMultiple(of: 40) {
+                await Task.yield()
+            }
             let item = located.item
             let key = VideoAsset.makeIdentityKey(
                 googleUserID: account.googleUserID,
@@ -89,6 +95,7 @@ final class DriveSyncService {
                     if metadataChanged {
                         video.updatedAt = scanTime
                     }
+                    hasPersistentChanges = true
                 }
             } else {
                 let video = VideoAsset(
@@ -108,17 +115,28 @@ final class DriveSyncService {
                 )
                 context.insert(video)
                 newVideos += 1
+                hasPersistentChanges = true
             }
         }
 
-        for video in accountVideos where !seenVideoKeys.contains(video.identityKey) {
+        for video in accountVideos where
+            !seenVideoKeys.contains(video.identityKey) && !video.isMissingFromDrive
+        {
             video.isMissingFromDrive = true
             video.updatedAt = scanTime
+            hasPersistentChanges = true
         }
 
-        account.isMissingFromDrive = false
-        account.updatedAt = scanTime
-        try context.save()
+        if account.isMissingFromDrive {
+            account.isMissingFromDrive = false
+            account.updatedAt = scanTime
+            hasPersistentChanges = true
+        }
+        // An unchanged scan should not write the whole context and invalidate
+        // every SwiftData-backed screen. This was the largest recurring hitch.
+        if hasPersistentChanges {
+            try context.save()
+        }
         return DriveSyncResult(
             accountsFound: 1,
             videosFound: locatedVideos.count,

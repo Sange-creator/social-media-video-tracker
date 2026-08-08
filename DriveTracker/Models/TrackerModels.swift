@@ -342,10 +342,9 @@ final class VideoAsset {
     }
 
     var activeAssignment: DailyAssignment? {
-        assignments
-            .filter(\.isActive)
-            .sorted { $0.assignedAt > $1.assignedAt }
-            .first
+        // There should be one active assignment per video. Avoid allocating and
+        // sorting a new array every time a Library row asks for its status.
+        assignments.first(where: \.isActive)
     }
 
     var status: VideoStatus {

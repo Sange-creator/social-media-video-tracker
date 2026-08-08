@@ -36,7 +36,7 @@ struct TodayView: View {
                         } label: {
                             TodayAccountRow(account: account)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(TrackerPressButtonStyle())
                     }
 
                     if activeAccounts.isEmpty {
@@ -50,7 +50,7 @@ struct TodayView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 96)
+                .padding(.bottom, 24)
             }
             .trackerScreen()
             .navigationTitle("Today")
@@ -96,16 +96,15 @@ struct TodayView: View {
                     )
                     .font(.subheadline.weight(.semibold))
 
-                    Text(selectedUSZone.title.uppercased())
-                        .font(.caption2.weight(.bold))
-                        .tracking(1.3)
-                        .foregroundStyle(TrackerPalette.accent)
+                    Text(selectedUSZone.title)
+                        .font(.caption)
+                        .foregroundStyle(TrackerPalette.muted)
                 }
                 Spacer()
                 Text(
                     formattedTime(timeline.date)
                 )
-                .font(.title2.monospacedDigit().weight(.bold))
+                .font(.title3.monospacedDigit().weight(.semibold))
             }
             .trackerCard(padding: 14)
         }
@@ -129,7 +128,7 @@ struct TodayView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Suggested US schedule", systemImage: "clock.badge.checkmark")
-                    .font(.headline.weight(.bold))
+                    .font(.headline.weight(.semibold))
                 Spacer()
                 Text(selectedUSZone.title)
                     .font(.caption.weight(.semibold))
@@ -138,16 +137,16 @@ struct TodayView: View {
             HStack(spacing: 8) {
                 ForEach(NewYorkSchedule.slots) { slot in
                     VStack(spacing: 3) {
-                        Text("VIDEO \(slot.number)")
-                            .font(.caption2.weight(.bold))
+                        Text("Video \(slot.number)")
+                            .font(.caption)
                             .foregroundStyle(TrackerPalette.muted)
                         Text(slot.label(in: selectedUSZone.timeZone))
-                            .font(.subheadline.monospacedDigit().weight(.bold))
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
                     .background(TrackerPalette.raised)
-                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
         }
@@ -167,7 +166,7 @@ private struct TodayAccountRow: View {
             )
             Text(account.displayName)
                 .font(.headline.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer()
             Image(systemName: "chevron.right")
@@ -190,7 +189,7 @@ private struct TodayAccountDetailView: View {
                 AccountTodaySection(account: account)
             }
             .padding(16)
-            .padding(.bottom, 104)
+            .padding(.bottom, 24)
         }
         .trackerScreen()
         .navigationTitle(account.displayName)
@@ -242,15 +241,15 @@ private struct AccountTodaySection: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(account.displayName)
-                        .font(.headline.weight(.bold))
+                        .font(.headline.weight(.semibold))
                     Text("\(account.availableCount) unused  /  \(account.uploadedCount) completed")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(TrackerPalette.muted)
                 }
                 Spacer()
                 Text("\(completed)/\(account.dailyQuota)")
-                    .font(.title3.monospacedDigit().weight(.bold))
-                    .foregroundStyle(completed == account.dailyQuota ? TrackerPalette.success : .white)
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(completed == account.dailyQuota ? TrackerPalette.success : .primary)
             }
             .padding(15)
 
@@ -268,7 +267,7 @@ private struct AccountTodaySection: View {
                 Button {
                     showManualPicker = true
                 } label: {
-                    Label("Choose My Own", systemImage: "hand.tap.fill")
+                    Label("Choose video", systemImage: "hand.tap.fill")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -303,10 +302,10 @@ private struct AccountTodaySection: View {
         }
         .background(TrackerPalette.surface)
         .overlay {
-            RoundedRectangle(cornerRadius: 13)
-                .stroke(TrackerPalette.line, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(TrackerPalette.line, lineWidth: 0.5)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .sheet(isPresented: $showManualPicker) {
             ManualVideoPickerView(account: account)
         }
@@ -496,7 +495,7 @@ private struct TodayVideoRow: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                guard !video.isMissingFromDrive, video.canDownload else { return }
+                guard !video.isMissingFromDrive else { return }
                 showPreview = true
             }
 
