@@ -124,21 +124,6 @@ final class AppState: ObservableObject {
         if let userID = auth.userID {
             activateCopyQueueConfiguration(for: userID)
         }
-        if !defaults.bool(forKey: Keys.requestedResetVerified) {
-            guard deleteLocalData(context: context) else { return }
-            if auth.isSignedIn {
-                do {
-                    try await backupService.deleteRemoteBackup()
-                } catch {
-                    // Local reset remains authoritative. Automatic restore is
-                    // suppressed until a new folder is explicitly connected.
-                }
-            }
-            defaults.set(true, forKey: Keys.requestedResetVerified)
-            defaults.set(true, forKey: Keys.suppressAutomaticRestore)
-            statusMessage = "Tracker setup cleared. Google remains connected; configure your accounts and folders again."
-            return
-        }
         guard auth.isSignedIn, let userID = auth.userID else { return }
         do {
             if !defaults.bool(forKey: Keys.suppressAutomaticRestore),

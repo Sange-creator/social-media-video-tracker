@@ -71,11 +71,9 @@ struct RootView: View {
                 state.statusMessage = nil
             }
             .tint(TrackerPalette.accent)
+            .preferredColorScheme(.dark)
     }
 
-    // Keeping the large onboarding and dashboard trees behind a small
-    // type-erased boundary prevents a cold debug launch from eagerly preparing
-    // metadata for every screen before the first frame is displayed.
     private var rootContent: AnyView {
         if auth.isRestoring {
             return AnyView(
@@ -87,14 +85,6 @@ struct RootView: View {
         }
         if !hasConfiguredAccount {
             return AnyView(OnboardingView())
-        }
-        if !dashboardIsReady {
-            return AnyView(
-                LaunchView(
-                    title: "Preparing today",
-                    detail: "Loading accounts and assignments…"
-                )
-            )
         }
         return AnyView(MainTabView())
     }
