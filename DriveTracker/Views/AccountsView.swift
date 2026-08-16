@@ -14,12 +14,15 @@ struct AccountsView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 12) {
+                    customTopHeader
+
                     HStack {
                         TrackerSectionLabel(
                             title: "Your accounts",
                             trailing: "\(activeCount) active / \(accounts.count) total"
                         )
                     }
+                    .padding(.top, 4)
                     .padding(.bottom, 4)
 
                     ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
@@ -42,22 +45,11 @@ struct AccountsView: View {
                     }
                 }
                 .padding(16)
-                .padding(.bottom, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 96)
             }
             .trackerScreen()
-            .navigationTitle("Accounts")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showFolderBrowser = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("Add account")
-                }
-            }
-            .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(isPresented: $showFolderBrowser) {
             DriveFolderBrowserView { folder in
@@ -67,6 +59,40 @@ struct AccountsView: View {
         .sheet(item: $pendingFolder) { folder in
             FolderAssociationView(folder: folder, originalLink: nil)
         }
+    }
+
+    private var customTopHeader: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ACCOUNTS")
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(TrackerPalette.textPrimary)
+
+                Text("\(accounts.filter { $0.isConfigured }.count) Active Profiles")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TrackerPalette.muted)
+            }
+
+            Spacer()
+
+            Button {
+                showFolderBrowser = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Add")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .foregroundStyle(Color(hex: "#090A0F"))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(TrackerPalette.accent, in: Capsule())
+            }
+            .buttonStyle(TrackerPressButtonStyle())
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
     }
 }
 
@@ -88,6 +114,17 @@ private struct AccountRow: View {
         return TrackerPalette.success
     }
 
+    private var completedToday: Int {
+        account.videos.filter { video in
+            guard let uploadedAt = video.uploadedAt else { return false }
+            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
+        }.count
+    }
+
+    private var quotaProgress: Double {
+        account.dailyQuota > 0 ? Double(completedToday) / Double(account.dailyQuota) : 0
+    }
+
     var body: some View {
         VStack(spacing: 14) {
             HStack(spacing: 12) {
@@ -100,7 +137,7 @@ private struct AccountRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account.isConfigured ? account.displayName : "Configure account")
                         .font(.headline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(TrackerPalette.textPrimary)
                     Text(account.folderName)
                         .font(.caption)
                         .foregroundStyle(TrackerPalette.muted)
@@ -110,15 +147,44 @@ private struct AccountRow: View {
                 Spacer()
 
                 HStack(spacing: 6) {
-                    Circle().fill(stateColor).frame(width: 6, height: 6)
+                    Circle()
+                        .fill(stateColor)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: stateColor.opacity(0.6), radius: 3)
                     Text(stateLabel)
-                        .font(.caption.weight(.medium))
+                        .font(.caption.weight(.semibold))
                 }
                 .foregroundStyle(stateColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(stateColor.opacity(0.12), in: Capsule())
 
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
                     .foregroundStyle(TrackerPalette.muted)
+            }
+
+            // Quota progress bar
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Today's Pace")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(TrackerPalette.muted)
+                    Spacer()
+                    Text("\(completedToday) of \(account.dailyQuota) done")
+                        .font(.caption2.monospacedDigit().weight(.bold))
+                        .foregroundStyle(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
+                }
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(TrackerPalette.raised)
+                        Capsule()
+                            .fill(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
+                            .frame(width: geo.size.width * min(max(quotaProgress, 0), 1))
+                    }
+                }
+                .frame(height: 5)
             }
 
             Divider().overlay(TrackerPalette.line)
@@ -126,7 +192,7 @@ private struct AccountRow: View {
             HStack {
                 TrackerMetric(value: "\(account.dailyQuota)", label: "Daily quota")
                 Spacer()
-                TrackerMetric(value: "\(account.availableCount)", label: "Unused")
+                TrackerMetric(value: "\(account.availableCount)", label: "Unused", tint: TrackerPalette.accent)
                 Spacer()
                 TrackerMetric(
                     value: "\(account.uploadedCount)",
@@ -135,7 +201,7 @@ private struct AccountRow: View {
                 )
             }
         }
-        .trackerCard()
+        .trackerCard(padding: 16)
     }
 }
 
@@ -150,6 +216,15 @@ struct AccountEditorView: View {
     @State private var draftPaused = false
     @State private var draftIconSymbol = "sparkles"
     @State private var draftIconColor = "#4F46E5"
+    @State private var draftTimeZoneID: String = ""
+    @State private var draftSlot1Hour: Int = 9
+    @State private var draftSlot2Hour: Int = 13
+    @State private var draftSlot3Hour: Int = 20
+    @State private var draftRemindersEnabled: Bool = true
+    @State private var draftAlbumName: String = ""
+    @State private var draftSuggestionStrategy: String = "shuffle"
+    @State private var draftAutoComplete: Bool = true
+    @State private var draftStrictChecksum: Bool = true
     @State private var confirmDelete = false
 
     private var trackedFolderPaths: [String] {
@@ -199,6 +274,66 @@ struct AccountEditorView: View {
                     .foregroundStyle(TrackerPalette.muted)
             } header: {
                 TrackerSectionLabel(title: "Managed account")
+            }
+
+            Section {
+                Picker("Target time zone", selection: $draftTimeZoneID) {
+                    Text("App default (\(state.reminderTimeZoneID.split(separator: "/").last ?? "ET"))").tag("")
+                    ForEach(USReminderTimeZone.allCases) { zone in
+                        Text("\(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
+                    }
+                }
+
+                Stepper(value: $draftSlot1Hour, in: 0 ... 23) {
+                    LabeledContent("Posting slot 1") {
+                        Text(formatHour(draftSlot1Hour))
+                            .font(.body.monospacedDigit().weight(.bold))
+                    }
+                }
+
+                Stepper(value: $draftSlot2Hour, in: 0 ... 23) {
+                    LabeledContent("Posting slot 2") {
+                        Text(formatHour(draftSlot2Hour))
+                            .font(.body.monospacedDigit().weight(.bold))
+                    }
+                }
+
+                Stepper(value: $draftSlot3Hour, in: 0 ... 23) {
+                    LabeledContent("Posting slot 3") {
+                        Text(formatHour(draftSlot3Hour))
+                            .font(.body.monospacedDigit().weight(.bold))
+                    }
+                }
+
+                Toggle("Account reminders", isOn: $draftRemindersEnabled)
+                    .tint(TrackerPalette.accent)
+            } header: {
+                TrackerSectionLabel(title: "Time & Schedule settings")
+            } footer: {
+                Text("Controls the daily suggestion timeline and reminder windows for this specific account.")
+            }
+
+            Section {
+                TextField("Custom Photos album name", text: $draftAlbumName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                Picker("Daily suggestion strategy", selection: $draftSuggestionStrategy) {
+                    Text("Random shuffle").tag("shuffle")
+                    Text("Newest uploads first").tag("newest")
+                    Text("Oldest inventory first").tag("oldest")
+                    Text("Alphabetical (A-Z)").tag("alphabetical")
+                }
+
+                Toggle("Auto-mark completed on download", isOn: $draftAutoComplete)
+                    .tint(TrackerPalette.success)
+
+                Toggle("Verify MD5 checksum", isOn: $draftStrictChecksum)
+                    .tint(TrackerPalette.accent)
+            } header: {
+                TrackerSectionLabel(title: "Uploading & media settings")
+            } footer: {
+                Text("Configure how videos from this account are saved to Apple Photos and picked from Google Drive.")
             }
 
             Section {
@@ -274,6 +409,15 @@ struct AccountEditorView: View {
             draftPaused = account.isPaused
             draftIconSymbol = account.iconSymbol
             draftIconColor = account.iconColorHex
+            draftTimeZoneID = account.targetTimeZoneID ?? ""
+            draftSlot1Hour = account.preferredSlot1Hour
+            draftSlot2Hour = account.preferredSlot2Hour
+            draftSlot3Hour = account.preferredSlot3Hour
+            draftRemindersEnabled = account.remindersEnabled
+            draftAlbumName = account.customAlbumName ?? ""
+            draftSuggestionStrategy = account.suggestionStrategy
+            draftAutoComplete = account.autoCompleteOnDownload
+            draftStrictChecksum = account.strictChecksum
         }
         .onChange(of: draftHandle) { _, newValue in
             let style = AccountIconCatalog.style(forName: newValue, fallbackID: account.id)
@@ -295,6 +439,12 @@ struct AccountEditorView: View {
         }
     }
 
+    private func formatHour(_ hour: Int) -> String {
+        let period = hour >= 12 ? "PM" : "AM"
+        let displayHour = hour % 12 == 0 ? 12 : hour % 12
+        return "\(displayHour):00 \(period)"
+    }
+
     private func save() {
         account.displayName = draftHandle
         account.dailyQuota = draftQuota
@@ -302,6 +452,16 @@ struct AccountEditorView: View {
         let style = AccountIconCatalog.style(forName: draftHandle, fallbackID: account.id)
         account.iconSymbol = style.symbol
         account.iconColorHex = style.colorHex
+        account.targetTimeZoneID = draftTimeZoneID.isEmpty ? nil : draftTimeZoneID
+        account.preferredSlot1Hour = draftSlot1Hour
+        account.preferredSlot2Hour = draftSlot2Hour
+        account.preferredSlot3Hour = draftSlot3Hour
+        account.remindersEnabled = draftRemindersEnabled
+        account.customAlbumName = draftAlbumName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draftAlbumName.trimmingCharacters(in: .whitespacesAndNewlines)
+        account.suggestionStrategy = draftSuggestionStrategy
+        account.autoCompleteOnDownload = draftAutoComplete
+        account.strictChecksum = draftStrictChecksum
+
         state.accountChanged(account, context: context)
         if account.isConfigured, isSetupFlow {
             dismiss()

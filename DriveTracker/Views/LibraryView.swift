@@ -20,9 +20,11 @@ struct LibraryView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVStack(spacing: 12) {
+                LazyVStack(spacing: 14) {
+                    customTopHeader
+
                     TrackerSectionLabel(
-                        title: "Tracked accounts",
+                        title: "Tracked Accounts",
                         trailing: "\(filteredAccounts.count) accounts"
                     )
 
@@ -50,14 +52,30 @@ struct LibraryView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 96)
             }
             .trackerScreen()
-            .navigationTitle("Library")
-            .searchable(text: $search, prompt: "Search accounts")
-            .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
         }
+    }
+
+    private var customTopHeader: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("LIBRARY")
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(TrackerPalette.textPrimary)
+
+                Text("Video Vault & Inventory")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TrackerPalette.muted)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
     }
 }
 
@@ -65,18 +83,18 @@ private struct LibraryAccountRow: View {
     let account: TikTokAccount
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
                 AccountIdentityIcon(
                     symbol: account.iconSymbol,
                     colorHex: account.iconColorHex,
-                    size: 50
+                    size: 52
                 )
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(account.displayName)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(TrackerPalette.textPrimary)
                     Label(account.folderName, systemImage: "folder")
                         .font(.caption)
                         .foregroundStyle(TrackerPalette.muted)
@@ -85,15 +103,20 @@ private struct LibraryAccountRow: View {
 
                 Spacer()
                 Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
                     .foregroundStyle(TrackerPalette.muted)
             }
 
             Divider().overlay(TrackerPalette.line)
 
             HStack {
-                TrackerMetric(value: "\(account.videos.count)", label: "Videos")
+                TrackerMetric(value: "\(account.videos.count)", label: "Total")
                 Spacer()
-                TrackerMetric(value: "\(account.availableCount)", label: "Unused")
+                TrackerMetric(
+                    value: "\(account.availableCount)",
+                    label: "Unused",
+                    tint: TrackerPalette.accent
+                )
                 Spacer()
                 TrackerMetric(
                     value: "\(account.uploadedCount)",
@@ -102,7 +125,7 @@ private struct LibraryAccountRow: View {
                 )
             }
         }
-        .trackerCard()
+        .trackerCard(padding: 16)
     }
 }
 
@@ -114,6 +137,7 @@ private struct AccountLibraryView: View {
     @State private var selectedStatus: VideoStatus?
     @State private var missingOnly = false
     @State private var previewVideo: VideoAsset?
+    @State private var isGridView = true
 
     private var filteredVideos: [VideoAsset] {
         account.videos
@@ -128,16 +152,32 @@ private struct AccountLibraryView: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 10) {
-                filterBar
-                    .padding(.bottom, 6)
+            LazyVStack(spacing: 16) {
+                accountHeroCard
 
-                TrackerSectionLabel(
-                    title: "Videos for \(account.displayName)",
-                    trailing: "\(filteredVideos.count) files"
-                )
+                filterBar
+
+                HStack {
+                    TrackerSectionLabel(
+                        title: "Media Library",
+                        trailing: "\(filteredVideos.count) videos"
+                    )
+                    Spacer()
+                    Button {
+                        isGridView.toggle()
+                    } label: {
+                        Image(systemName: isGridView ? "list.bullet" : "square.grid.2x2")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(TrackerPalette.accent)
+                    }
+                }
 
                 if filteredVideos.isEmpty {
                     ContentUnavailableView(
@@ -147,21 +187,31 @@ private struct AccountLibraryView: View {
                     )
                     .foregroundStyle(TrackerPalette.muted)
                     .padding(.top, 44)
+                } else if isGridView {
+                    LazyVGrid(columns: columns, spacing: 14) {
+                        ForEach(filteredVideos) { video in
+                            LibraryVideoPosterCard(video: video) {
+                                previewVideo = video
+                            }
+                        }
+                    }
                 } else {
-                    ForEach(filteredVideos) { video in
-                        LibraryVideoCard(video: video) {
-                            previewVideo = video
+                    LazyVStack(spacing: 12) {
+                        ForEach(filteredVideos) { video in
+                            LibraryVideoListCard(video: video) {
+                                previewVideo = video
+                            }
                         }
                     }
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            .padding(.bottom, 28)
         }
         .trackerScreen()
         .navigationTitle(account.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $search, prompt: "Search videos or folders")
+        .searchable(text: $search, prompt: "Search videos or subfolders")
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .sheet(item: $previewVideo) { video in
@@ -172,23 +222,95 @@ private struct AccountLibraryView: View {
         }
     }
 
+    private var accountHeroCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                AccountIdentityIcon(
+                    symbol: account.iconSymbol,
+                    colorHex: account.iconColorHex,
+                    size: 54
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(account.displayName)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(TrackerPalette.textPrimary)
+
+                    Label(
+                        account.folderName,
+                        systemImage: "folder.badge.gearshape"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(TrackerPalette.muted)
+                    .lineLimit(1)
+                }
+
+                Spacer()
+            }
+
+            Divider().overlay(TrackerPalette.line)
+
+            HStack {
+                TrackerMetric(value: "\(account.videos.count)", label: "Total")
+                Spacer()
+                TrackerMetric(
+                    value: "\(account.availableCount)",
+                    label: "Unused",
+                    tint: TrackerPalette.accent
+                )
+                Spacer()
+                TrackerMetric(
+                    value: "\(account.uploadedCount)",
+                    label: "Completed",
+                    tint: TrackerPalette.success
+                )
+                Spacer()
+                TrackerMetric(
+                    value: "\(account.dailyQuota)",
+                    label: "Daily Quota",
+                    tint: TrackerPalette.warning
+                )
+            }
+        }
+        .trackerCard(padding: 16)
+    }
+
     private var filterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Menu {
-                    Button("All statuses") { selectedStatus = nil }
-                    ForEach(VideoStatus.allCases) { status in
-                        Button(status.title) { selectedStatus = status }
-                    }
+                Button {
+                    selectedStatus = nil
+                    missingOnly = false
                 } label: {
                     FilterChip(
-                        title: selectedStatus?.title ?? "All statuses",
-                        selected: selectedStatus != nil
+                        title: "All (\(account.videos.count))",
+                        selected: selectedStatus == nil && !missingOnly
+                    )
+                }
+
+                Button {
+                    selectedStatus = .available
+                    missingOnly = false
+                } label: {
+                    FilterChip(
+                        title: "Unused (\(account.availableCount))",
+                        selected: selectedStatus == .available
+                    )
+                }
+
+                Button {
+                    selectedStatus = .uploaded
+                    missingOnly = false
+                } label: {
+                    FilterChip(
+                        title: "Completed (\(account.uploadedCount))",
+                        selected: selectedStatus == .uploaded
                     )
                 }
 
                 Button {
                     missingOnly.toggle()
+                    if missingOnly { selectedStatus = nil }
                 } label: {
                     FilterChip(title: "Missing", selected: missingOnly)
                 }
@@ -197,11 +319,130 @@ private struct AccountLibraryView: View {
     }
 }
 
-private struct LibraryVideoCard: View {
+/// 9:16 Vertical Poster Grid Card matching the Stitch UI design
+private struct LibraryVideoPosterCard: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
     let preview: () -> Void
+
+    private var isDownloading: Bool {
+        state.isDownloading(video)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .topTrailing) {
+                VideoThumbnailView(
+                    video: video,
+                    width: (UIScreen.main.bounds.width - 44) / 2,
+                    height: ((UIScreen.main.bounds.width - 44) / 2) * 1.38,
+                    cornerRadius: 14
+                )
+
+                // Top duration badge & indicators
+                HStack(spacing: 4) {
+                    if video.isMissingFromDrive {
+                        Image(systemName: "icloud.slash")
+                            .font(.caption2.bold())
+                            .foregroundStyle(TrackerPalette.danger)
+                            .padding(5)
+                            .background(Color.black.opacity(0.7), in: Circle())
+                    }
+
+                    StatusPill(status: video.status)
+                }
+                .padding(8)
+
+                // Bottom Content Scrim Overlay
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer()
+                    Text(video.name)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .shadow(color: .black.opacity(0.8), radius: 3)
+
+                    if !video.folderPath.isEmpty {
+                        Text(video.folderPath)
+                            .font(.system(size: 10))
+                            .foregroundStyle(TrackerPalette.muted)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: preview)
+
+            // Bottom Quick Action Bar
+            HStack(spacing: 8) {
+                if video.status == .available || video.status == .assigned {
+                    Button {
+                        if isDownloading {
+                            state.cancelDownload(video)
+                        } else {
+                            state.startParallelDownload(video, context: context)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: isDownloading ? "xmark" : "arrow.down")
+                            Text(isDownloading ? "Cancel" : "Download")
+                        }
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(isDownloading ? TrackerPalette.warning : Color(hex: "#090A0F"))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(isDownloading ? TrackerPalette.surface : TrackerPalette.accent)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(TrackerPressButtonStyle())
+                    .disabled(!isDownloading && (video.isMissingFromDrive || !video.canDownload))
+                } else if video.status == .uploaded {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Saved")
+                    }
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(TrackerPalette.success)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .background(TrackerPalette.success.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+
+                NavigationLink {
+                    VideoDetailView(video: video)
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TrackerPalette.muted)
+                        .frame(width: 32, height: 32)
+                        .background(TrackerPalette.raised)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(TrackerPressButtonStyle())
+            }
+            .padding(8)
+            .background(TrackerPalette.surface)
+        }
+        .background(TrackerPalette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(TrackerPalette.line, lineWidth: 0.5)
+        }
+        .shadow(color: Color.black.opacity(0.25), radius: 10, y: 4)
+    }
+}
+
+private struct LibraryVideoListCard: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var state: AppState
+    let video: VideoAsset
+    let preview: () -> Void
+    @State private var confirmRedownload = false
 
     private var isDownloading: Bool {
         state.isDownloading(video)
@@ -214,13 +455,14 @@ private struct LibraryVideoCard: View {
                     VideoThumbnailView(
                         video: video,
                         width: 82,
-                        height: 110
+                        height: 110,
+                        cornerRadius: 10
                     )
 
                     VStack(alignment: .leading, spacing: 7) {
                         Text(video.name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(TrackerPalette.textPrimary)
                             .lineLimit(2)
 
                         StatusPill(status: video.status)
@@ -239,12 +481,10 @@ private struct LibraryVideoCard: View {
                         if video.isMissingFromDrive {
                             Image(systemName: "icloud.slash")
                                 .foregroundStyle(TrackerPalette.danger)
-                                .accessibilityLabel("Missing from Drive")
                         }
                         if video.isMissingFromPhotos {
                             Image(systemName: "photo.badge.exclamationmark")
                                 .foregroundStyle(TrackerPalette.warning)
-                                .accessibilityLabel("Deleted from Photos")
                         }
                     }
                 }
@@ -260,14 +500,8 @@ private struct LibraryVideoCard: View {
                         let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
                         let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
                         Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
-                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .font(.caption.monospacedDigit().weight(.bold))
                             .foregroundStyle(TrackerPalette.accent)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    } else {
-                        Text("Connecting background download…")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(TrackerPalette.muted)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
@@ -287,10 +521,12 @@ private struct LibraryVideoCard: View {
             Divider().overlay(TrackerPalette.line)
 
             HStack(spacing: 0) {
-                if video.status == .available || video.status == .assigned {
+                if video.status == .available || video.status == .assigned || video.status == .uploaded {
                     Button {
                         if isDownloading {
                             state.cancelDownload(video)
+                        } else if video.status == .uploaded {
+                            confirmRedownload = true
                         } else {
                             state.startParallelDownload(video, context: context)
                         }
@@ -300,9 +536,17 @@ private struct LibraryVideoCard: View {
                                 ProgressView()
                                     .tint(TrackerPalette.warning)
                             } else {
-                                Image(systemName: "arrow.down.to.line")
+                                Image(
+                                    systemName: video.status == .uploaded
+                                        ? "arrow.clockwise"
+                                        : "arrow.down.to.line"
+                                )
                             }
-                            Text(isDownloading ? "Cancel" : "Download")
+                            Text(
+                                isDownloading
+                                    ? "Cancel"
+                                    : (video.status == .uploaded ? "Download Again" : "Download")
+                            )
                         }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(
@@ -316,8 +560,8 @@ private struct LibraryVideoCard: View {
                     }
                     .buttonStyle(TrackerPressButtonStyle())
                     .disabled(
-                        video.isMissingFromDrive ||
-                        !video.canDownload
+                        !isDownloading &&
+                        (video.isMissingFromDrive || !video.canDownload)
                     )
 
                     Divider()
@@ -338,6 +582,17 @@ private struct LibraryVideoCard: View {
                 .buttonStyle(TrackerPressButtonStyle())
             }
         }
+        .confirmationDialog(
+            "Do you want to download again?",
+            isPresented: $confirmRedownload
+        ) {
+            Button("Download Again") {
+                state.startParallelRedownload(video, context: context)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Another copy of \(video.name) will be saved to Photos.")
+        }
         .background(TrackerPalette.surface)
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -352,6 +607,7 @@ struct VideoDetailView: View {
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
     @State private var confirmReset = false
+    @State private var confirmRedownload = false
     @State private var showPreview = false
 
     private var sortedEvents: [StatusEvent] {
@@ -390,15 +646,16 @@ struct VideoDetailView: View {
 
     private var videoCard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            TrackerSectionLabel(title: "Video details")
+            TrackerSectionLabel(title: "Video Details")
 
             Button {
                 showPreview = true
             } label: {
                 VideoThumbnailView(
                     video: video,
-                    width: 190,
-                    height: 254
+                    width: 200,
+                    height: 268,
+                    cornerRadius: 14
                 )
                 .frame(maxWidth: .infinity)
             }
@@ -408,7 +665,7 @@ struct VideoDetailView: View {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: "info.circle")
                     .foregroundStyle(TrackerPalette.muted)
-                Text("Preview streams the video from Drive and does not mark it completed.")
+                Text("Tap the poster frame to stream a real-time preview directly from Drive.")
                     .font(.caption)
                     .foregroundStyle(TrackerPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -427,7 +684,7 @@ struct VideoDetailView: View {
                 LabeledContent("State") {
                     StatusPill(status: video.status)
                 }
-                LabeledContent("Drive file ID") {
+                LabeledContent("Drive File ID") {
                     Text(video.driveFileID)
                         .font(.caption.monospaced())
                         .foregroundStyle(TrackerPalette.muted)
@@ -463,17 +720,6 @@ struct VideoDetailView: View {
 
             TrackerSectionLabel(title: "Actions")
             actionButtons
-
-            if video.status == .available {
-                HStack(alignment: .top, spacing: 9) {
-                    Image(systemName: "info.circle.fill")
-                        .foregroundStyle(TrackerPalette.warning)
-                    Text("Adding this video to Today may replace an untouched suggestion when the account list is full. Completed videos are never suggested again.")
-                        .font(.caption)
-                        .foregroundStyle(TrackerPalette.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
         }
         .trackerCard(padding: 16)
     }
@@ -485,7 +731,7 @@ struct VideoDetailView: View {
                 Button {
                     state.cancelDownload(video)
                 } label: {
-                    Label("Cancel download", systemImage: "xmark.circle")
+                    Label("Cancel Download", systemImage: "xmark.circle")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
@@ -493,14 +739,11 @@ struct VideoDetailView: View {
                 Button {
                     state.startParallelDownload(video, context: context)
                 } label: {
-                    Label("Download to Photos", systemImage: "arrow.down.to.line")
+                    Label("Download Original to Photos", systemImage: "arrow.down.to.line")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(TrackerActionButtonStyle(kind: .primary))
-                .disabled(
-                    video.isMissingFromDrive ||
-                    !video.canDownload
-                )
+                .disabled(video.isMissingFromDrive || !video.canDownload)
             }
         }
 
@@ -508,7 +751,7 @@ struct VideoDetailView: View {
             Button {
                 state.selectManually(video, context: context)
             } label: {
-                Label("Add to today’s queue", systemImage: "calendar.badge.plus")
+                Label("Add to Today's Queue", systemImage: "calendar.badge.plus")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
@@ -519,55 +762,48 @@ struct VideoDetailView: View {
             Button {
                 state.markCompletedOutsideApp(video, context: context)
             } label: {
-                Label(
-                    "Already downloaded — Mark completed",
-                    systemImage: "checkmark.circle.fill"
-                )
-                .frame(maxWidth: .infinity)
+                Label("Mark Already Downloaded", systemImage: "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
-        }
-
-        if video.status == .downloaded {
-            Label("Completing automatically…", systemImage: "checkmark.circle")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(TrackerPalette.accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(state.isDownloading(video))
         }
 
         if video.status == .uploaded {
-            Button {
-                Task { await state.redownload(video, context: context) }
-            } label: {
-                Label("Download another copy", systemImage: "arrow.clockwise")
-                    .frame(maxWidth: .infinity)
+            if state.isDownloading(video) {
+                Button {
+                    state.cancelDownload(video)
+                } label: {
+                    Label("Cancel Download", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            } else {
+                Button {
+                    confirmRedownload = true
+                } label: {
+                    Label("Download Another Copy", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                .disabled(video.isMissingFromDrive || !video.canDownload)
             }
-            .buttonStyle(TrackerActionButtonStyle(kind: .primary))
 
             Button {
                 state.undoUpload(video, context: context)
             } label: {
-                Label("Undo completed status", systemImage: "arrow.uturn.backward")
+                Label("Undo Completed Status", systemImage: "arrow.uturn.backward")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
-        }
-
-        if video.downloadedAt != nil {
-            Button {
-                state.verifyPhotoCopy(video, context: context)
-            } label: {
-                Label("Verify saved Photos copy", systemImage: "photo.badge.checkmark")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            .disabled(state.isDownloading(video))
         }
     }
 
     private var historyCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             TrackerSectionLabel(
-                title: "Audit history",
+                title: "Audit History",
                 trailing: "\(sortedEvents.count) events"
             )
 
@@ -576,17 +812,16 @@ struct VideoDetailView: View {
                     .font(.subheadline)
                     .foregroundStyle(TrackerPalette.muted)
             } else {
-                ForEach(Array(sortedEvents.enumerated()), id: \.element.id) {
-                    index,
-                    event in
+                ForEach(Array(sortedEvents.enumerated()), id: \.element.id) { index, event in
                     HStack(alignment: .top, spacing: 12) {
                         Circle()
                             .fill(TrackerPalette.accent)
                             .frame(width: 7, height: 7)
                             .padding(.top, 6)
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(event.kind.title)
-                                .font(.subheadline.weight(.semibold))
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(TrackerPalette.textPrimary)
                             Text(event.timestamp.formatted())
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(TrackerPalette.muted)
@@ -609,8 +844,10 @@ struct VideoDetailView: View {
     }
 }
 
+/// Video Preview Studio & Metadata Inspector matching Stitch Screen 3
 struct VideoPreviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
 
@@ -634,177 +871,244 @@ struct VideoPreviewView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                if isLoading {
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Video Player Frame
                     ZStack {
-                        VideoThumbnailView(video: video, width: 220, height: 330)
-                            .opacity(0.62)
-                        VStack(spacing: 12) {
-                            ProgressView()
-                                .controlSize(.large)
-                                .tint(.white)
-                            Text("Preparing secure Drive stream…")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(maxHeight: .infinity)
-                } else if let loadError {
-                    ContentUnavailableView(
-                        "Preview unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(loadError)
-                    )
-                    .frame(maxHeight: .infinity)
-                } else if let player {
-                    VStack(spacing: 12) {
-                        VideoPlayer(player: player)
-                            .background(.black)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .frame(maxWidth: .infinity, minHeight: 380, maxHeight: 520)
-
-                        // Fast Range & Review Controls
-                        VStack(spacing: 10) {
-                            // Instant Range Slider / Scrub Bar
-                            VStack(spacing: 4) {
-                                Slider(
-                                    value: Binding(
-                                        get: { currentTime },
-                                        set: { newValue in
-                                            currentTime = newValue
-                                            seek(to: newValue)
-                                        }
-                                    ),
-                                    in: 0...max(duration, 1),
-                                    onEditingChanged: { editing in
-                                        isEditingSlider = editing
-                                    }
-                                )
-                                .tint(TrackerPalette.accent)
-
-                                HStack {
-                                    Text(formatTime(currentTime))
-                                        .font(.caption.monospacedDigit().weight(.semibold))
-                                        .foregroundStyle(TrackerPalette.accent)
-                                    Spacer()
-                                    Text(formatTime(duration))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(TrackerPalette.muted)
+                        if isLoading {
+                            ZStack {
+                                VideoThumbnailView(video: video, width: 220, height: 330, cornerRadius: 16)
+                                    .opacity(0.60)
+                                VStack(spacing: 12) {
+                                    ProgressView()
+                                        .controlSize(.large)
+                                        .tint(TrackerPalette.accent)
+                                    Text("Streaming from Drive…")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(TrackerPalette.textPrimary)
                                 }
                             }
+                            .frame(height: 380)
+                        } else if let loadError {
+                            ContentUnavailableView(
+                                "Preview unavailable",
+                                systemImage: "exclamationmark.triangle",
+                                description: Text(loadError)
+                            )
+                            .frame(height: 320)
+                        } else if let player {
+                            VStack(spacing: 12) {
+                                VideoPlayer(player: player)
+                                    .background(Color.black)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(TrackerPalette.line, lineWidth: 0.5)
+                                    }
+                                    .frame(maxWidth: .infinity, minHeight: 360, maxHeight: 460)
 
-                            // Playback controls & Speed selector
-                            HStack(spacing: 16) {
-                                Button {
-                                    jump(by: -5)
-                                } label: {
-                                    Image(systemName: "gobackward.5")
-                                        .font(.title3)
+                                // Scrubber & Playback Controls
+                                VStack(spacing: 10) {
+                                    VStack(spacing: 4) {
+                                        Slider(
+                                            value: Binding(
+                                                get: { currentTime },
+                                                set: { newValue in
+                                                    currentTime = newValue
+                                                    seek(to: newValue)
+                                                }
+                                            ),
+                                            in: 0...max(duration, 1),
+                                            onEditingChanged: { editing in
+                                                isEditingSlider = editing
+                                            }
+                                        )
+                                        .tint(TrackerPalette.accent)
+
+                                        HStack {
+                                            Text(formatTime(currentTime))
+                                                .font(.caption2.monospacedDigit().weight(.bold))
+                                                .foregroundStyle(TrackerPalette.accent)
+                                            Spacer()
+                                            Text(formatTime(duration))
+                                                .font(.caption2.monospacedDigit())
+                                                .foregroundStyle(TrackerPalette.muted)
+                                        }
+                                    }
+
+                                    HStack(spacing: 18) {
+                                        Button {
+                                            jump(by: -5)
+                                        } label: {
+                                            Image(systemName: "gobackward.5")
+                                                .font(.title3)
+                                                .foregroundStyle(TrackerPalette.textPrimary)
+                                        }
+
+                                        Button {
+                                            togglePlayPause()
+                                        } label: {
+                                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                                .font(.system(size: 44))
+                                                .foregroundStyle(TrackerPalette.accent)
+                                        }
+
+                                        Button {
+                                            jump(by: 5)
+                                        } label: {
+                                            Image(systemName: "goforward.5")
+                                                .font(.title3)
+                                                .foregroundStyle(TrackerPalette.textPrimary)
+                                        }
+
+                                        Spacer()
+
+                                        Menu {
+                                            ForEach(speeds, id: \.self) { speed in
+                                                Button("\(String(format: "%.2fx", speed))") {
+                                                    setSpeed(speed)
+                                                }
+                                            }
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: "gauge.with.dots.needle.67percent")
+                                                Text("\(String(format: "%.1fx", playbackRate))")
+                                                    .font(.caption2.monospacedDigit().weight(.bold))
+                                            }
+                                            .padding(.horizontal, 9)
+                                            .padding(.vertical, 5)
+                                            .background(TrackerPalette.raised)
+                                            .clipShape(Capsule())
+                                            .overlay {
+                                                Capsule().stroke(TrackerPalette.line, lineWidth: 0.5)
+                                            }
+                                        }
+                                        .foregroundStyle(TrackerPalette.textPrimary)
+                                    }
+                                    .padding(.horizontal, 4)
+
+                                    Divider().overlay(TrackerPalette.line)
+
+                                    HStack(spacing: 12) {
+                                        Button {
+                                            toggleMute()
+                                        } label: {
+                                            Image(
+                                                systemName: isMuted || volume == 0
+                                                    ? "speaker.slash.fill"
+                                                    : "speaker.wave.2.fill"
+                                            )
+                                            .font(.body)
+                                            .foregroundStyle(TrackerPalette.muted)
+                                            .frame(width: 32, height: 32)
+                                        }
+                                        .buttonStyle(TrackerPressButtonStyle())
+
+                                        Slider(value: $volume, in: 0...1)
+                                            .tint(TrackerPalette.accent)
+                                            .onChange(of: volume) { _, newValue in
+                                                player.volume = Float(newValue)
+                                                if newValue > 0, isMuted {
+                                                    isMuted = false
+                                                    player.isMuted = false
+                                                }
+                                            }
+
+                                        Text(audioRouteName)
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(TrackerPalette.muted)
+                                            .lineLimit(1)
+                                            .frame(width: 60, alignment: .trailing)
+                                    }
                                 }
-
-                                Button {
-                                    togglePlayPause()
-                                } label: {
-                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                        .font(.system(size: 40))
-                                        .foregroundStyle(TrackerPalette.accent)
+                                .padding(14)
+                                .background(TrackerPalette.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(TrackerPalette.line, lineWidth: 0.5)
                                 }
+                            }
+                        }
+                    }
 
-                                Button {
-                                    jump(by: 5)
-                                } label: {
-                                    Image(systemName: "goforward.5")
-                                        .font(.title3)
-                                }
+                    // Metadata & Technical Specs Inspector
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(video.name)
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(TrackerPalette.textPrimary)
 
+                        HStack(spacing: 8) {
+                            StatusPill(status: video.status)
+
+                            Label(
+                                video.folderPath.isEmpty ? (video.account?.folderName ?? "Drive folder") : video.folderPath,
+                                systemImage: "folder"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(TrackerPalette.muted)
+                            .lineLimit(1)
+                        }
+
+                        HStack(spacing: 12) {
+                            Label("Original Quality", systemImage: "sparkles.tv")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(TrackerPalette.muted)
+                            Text("•")
+                                .foregroundStyle(TrackerPalette.muted)
+                            Label(video.account?.displayName ?? "Account", systemImage: "person.circle")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(TrackerPalette.muted)
+                        }
+                        .padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .trackerCard(padding: 14)
+
+                    // Action Dock
+                    VStack(spacing: 10) {
+                        if video.status != .uploaded {
+                            Button {
+                                state.startParallelDownload(video, context: context)
+                                dismiss()
+                            } label: {
+                                Label("Download Original to Photos", systemImage: "arrow.down.to.line.compact")
+                                    .font(.subheadline.weight(.bold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                            .disabled(video.isMissingFromDrive || !video.canDownload)
+
+                            Button {
+                                state.markCompletedOutsideApp(video, context: context)
+                                dismiss()
+                            } label: {
+                                Label("Mark Already Downloaded", systemImage: "checkmark.circle")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                        } else {
+                            HStack {
+                                Label("Completed & Saved to Photos", systemImage: "checkmark.circle.fill")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(TrackerPalette.success)
                                 Spacer()
-
-                                Menu {
-                                    ForEach(speeds, id: \.self) { speed in
-                                        Button("\(String(format: "%.2fx", speed))") {
-                                            setSpeed(speed)
-                                        }
-                                    }
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "gauge.with.dots.needle.67percent")
-                                        Text("\(String(format: "%.1fx", playbackRate))")
-                                            .font(.caption.monospacedDigit().weight(.bold))
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(TrackerPalette.raised)
-                                    .clipShape(Capsule())
-                                }
                             }
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 8)
-
-                            Divider().overlay(TrackerPalette.line)
-
-                            HStack(spacing: 12) {
-                                Button {
-                                    toggleMute()
-                                } label: {
-                                    Image(
-                                        systemName: isMuted || volume == 0
-                                            ? "speaker.slash.fill"
-                                            : "speaker.wave.2.fill"
-                                    )
-                                    .font(.title3)
-                                    .frame(width: 34, height: 34)
-                                }
-                                .buttonStyle(TrackerPressButtonStyle())
-                                .accessibilityLabel(isMuted ? "Unmute video" : "Mute video")
-
-                                Slider(value: $volume, in: 0...1)
-                                    .tint(TrackerPalette.accent)
-                                    .onChange(of: volume) { _, newValue in
-                                        player.volume = Float(newValue)
-                                        if newValue > 0, isMuted {
-                                            isMuted = false
-                                            player.isMuted = false
-                                        }
-                                    }
-
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text("Audio")
-                                        .font(.caption2)
-                                        .foregroundStyle(TrackerPalette.muted)
-                                    Text(audioRouteName)
-                                        .font(.caption2.weight(.semibold))
-                                        .lineLimit(1)
-                                }
-                                .frame(width: 72, alignment: .trailing)
-                            }
+                            .padding(.horizontal, 4)
                         }
-                        .padding(12)
-                        .background(TrackerPalette.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                 }
-
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(video.name)
-                        .font(.headline)
-                        .lineLimit(2)
-                    Label(
-                        video.folderPath.isEmpty ? (video.account?.folderName ?? "Drive folder") : video.folderPath,
-                        systemImage: "folder"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(TrackerPalette.muted)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .padding(.bottom, 24)
             }
-            .padding(16)
             .trackerScreen()
-            .navigationTitle("Instant Preview & Review")
+            .navigationTitle("Video Preview")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(TrackerPalette.accent)
                 }
             }
             .task { await loadPreview() }

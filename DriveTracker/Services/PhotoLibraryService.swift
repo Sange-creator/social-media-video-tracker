@@ -110,6 +110,10 @@ final class PhotoLibraryService {
     }
 
     private func sanitizedAlbumName(_ accountName: String) -> String {
-        "Drive Tracker – \(accountName.trimmingCharacters(in: .whitespacesAndNewlines))"
+        let trimmed = accountName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("Drive Tracker – ") || trimmed.hasPrefix("Drive Tracker - ") {
+            return trimmed
+        }
+        return "Drive Tracker – \(trimmed)"
     }
 }

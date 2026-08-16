@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Social Media Video Tracker</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Outfit:wght@600;700&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "text-muted": "#94a3b8",
+                        "surface-container-high": "#252b2e",
+                        "tertiary-container": "#22c990",
+                        "primary": "#8ed5ff",
+                        "error-container": "#93000a",
+                        "surface-variant": "#303539",
+                        "surface-container": "#1b2024",
+                        "surface": "#0f1418",
+                        "on-surface": "#dee3e8",
+                        "on-error": "#690005",
+                        "surface-container-low": "#171c20",
+                        "surface-container-highest": "#303539",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "tertiary-fixed-dim": "#45dfa4",
+                        "border-hairline": "#222739",
+                        "surface-obsidian": "#090a0f",
+                        "surface-elevated": "#1a1e2c",
+                        "inverse-primary": "#00668a",
+                        "surface-container-lowest": "#0a0f12",
+                        "surface-glass": "#131622",
+                        "outline-variant": "#3e484f",
+                        "secondary-container": "#2f3aa3",
+                        "primary-container": "#38bdf8",
+                        "on-surface-variant": "#bdc8d1",
+                        "on-secondary-fixed-variant": "#2f3aa3",
+                        "outline": "#87929a",
+                        "on-tertiary-container": "#004e35",
+                        "tertiary-fixed": "#68fcbf",
+                        "surface-bright": "#343a3e",
+                        "secondary": "#bdc2ff",
+                        "surface-tint": "#7bd0ff",
+                        "on-background": "#dee3e8",
+                        "primary-fixed-dim": "#7bd0ff",
+                        "inverse-surface": "#dee3e8",
+                        "on-primary-container": "#004965",
+                        "on-secondary-fixed": "#000767",
+                        "on-primary-fixed-variant": "#004c69",
+                        "inverse-on-surface": "#2c3135",
+                        "secondary-fixed": "#e0e0ff",
+                        "tertiary": "#4ee6aa",
+                        "on-tertiary-fixed": "#002114",
+                        "primary-fixed": "#c4e7ff",
+                        "on-secondary": "#131e8c",
+                        "warning-amber": "#fbbf24",
+                        "on-secondary-container": "#a8afff",
+                        "background": "#0f1418",
+                        "on-primary-fixed": "#001e2c",
+                        "error": "#ffb4ab",
+                        "secondary-fixed-dim": "#bdc2ff",
+                        "on-primary": "#00354a",
+                        "success-emerald": "#34d399",
+                        "on-tertiary": "#003825",
+                        "surface-dim": "#0f1418",
+                        "text-slate": "#f8fafc",
+                        "on-error-container": "#ffdad6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "section-gap": "24px",
+                        "gutter": "12px",
+                        "stack-md": "14px",
+                        "stack-sm": "8px",
+                        "container-margin": "16px"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["Inter"],
+                        "body-lg": ["Inter"],
+                        "label-md": ["Inter"],
+                        "headline-lg": ["Outfit"],
+                        "headline-md": ["Outfit"],
+                        "display-lg": ["Outfit"],
+                        "mono-data": ["JetBrains Mono"],
+                        "body-md": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "600" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "label-md": ["13px", { "lineHeight": "18px", "letterSpacing": "0.01em", "fontWeight": "500" }],
+                        "headline-lg": ["28px", { "lineHeight": "34px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "headline-md": ["20px", { "lineHeight": "26px", "fontWeight": "600" }],
+                        "display-lg": ["36px", { "lineHeight": "44px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "mono-data": ["12px", { "lineHeight": "16px", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface-obsidian text-on-surface min-h-screen pb-[120px] font-body-md antialiased selection:bg-primary-container selection:text-on-primary-container">
+<!-- Top Navigation Bar -->
+<header class="fixed top-0 w-full z-50 bg-surface-obsidian/80 backdrop-blur-md border-b border-border-hairline flex justify-between items-center px-container-margin h-16 w-full">
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center w-10 h-10 -ml-2 rounded-full hover:bg-surface-bright/10 active:scale-95 duration-150">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">arrow_back</span>
+</button>
+<div class="flex items-center gap-1.5">
+<h1 class="font-headline-md text-headline-md tracking-tighter text-on-surface">@FitLifeDaily</h1>
+<span class="material-symbols-outlined text-primary text-[18px]" style="font-variation-settings: 'FILL' 1;">verified</span>
+</div>
+<button class="text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center w-10 h-10 -mr-2 rounded-full hover:bg-surface-bright/10 active:scale-95 duration-150">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">folder</span>
+</button>
+</header>
+<!-- Main Content Canvas -->
+<main class="pt-20 px-container-margin max-w-md mx-auto w-full flex flex-col gap-section-gap">
+<!-- Account Hero Card -->
+<section class="bg-surface-glass border border-border-hairline rounded-xl p-4 flex flex-col gap-stack-md relative overflow-hidden backdrop-blur-xl">
+<!-- Subtle glow effect -->
+<div class="absolute -top-10 -right-10 w-32 h-32 bg-primary/5 rounded-full blur-3xl pointer-events-none"></div>
+<div class="flex justify-between items-start">
+<div class="flex flex-col gap-1">
+<span class="font-label-sm text-label-sm text-success-emerald border border-success-emerald/30 bg-success-emerald/10 px-2 py-0.5 rounded-full w-max uppercase tracking-wider">Fitness &amp; Gym</span>
+<p class="font-mono-data text-mono-data text-text-muted mt-2">/Google Drive/FitLife_2026/Reels/</p>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-2 mt-2 pt-4 border-t border-border-hairline/50">
+<div class="flex flex-col gap-1">
+<span class="font-display-lg text-display-lg text-on-surface">142</span>
+<span class="font-label-md text-label-md text-on-surface-variant">Total</span>
+</div>
+<div class="flex flex-col gap-1 pl-3 border-l border-border-hairline/50">
+<div class="flex items-center gap-1.5">
+<div class="w-2 h-2 rounded-full bg-primary shadow-[0_0_8px_rgba(142,213,255,0.6)]"></div>
+<span class="font-display-lg text-display-lg text-on-surface">89</span>
+</div>
+<span class="font-label-md text-label-md text-on-surface-variant">Unused</span>
+</div>
+<div class="flex flex-col gap-1 pl-3 border-l border-border-hairline/50">
+<div class="flex items-center gap-1.5">
+<div class="w-2 h-2 rounded-full bg-success-emerald shadow-[0_0_8px_rgba(52,211,153,0.6)]"></div>
+<span class="font-display-lg text-display-lg text-on-surface">53</span>
+</div>
+<span class="font-label-md text-label-md text-on-surface-variant">Completed</span>
+</div>
+</div>
+</section>
+<!-- Filter & Search -->
+<section class="flex flex-col gap-stack-sm sticky top-16 z-40 bg-surface-obsidian/95 backdrop-blur-md py-2 -mx-container-margin px-container-margin">
+<div class="relative w-full">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+<input class="w-full bg-surface-glass border border-border-hairline rounded-full pl-9 pr-4 py-2 font-body-md text-body-md text-on-surface placeholder:text-text-muted focus:outline-none focus:border-outline focus:ring-1 focus:ring-outline transition-colors" placeholder="Search videos by name or folder..." type="text"/>
+</div>
+<div class="flex overflow-x-auto gap-2 pb-1 scrollbar-hide snap-x">
+<button class="snap-start shrink-0 bg-primary-container text-on-primary-container font-label-md text-label-md px-4 py-1.5 rounded-full border border-primary-container/20 transition-colors">All</button>
+<button class="snap-start shrink-0 bg-surface-glass text-on-surface-variant font-label-md text-label-md px-4 py-1.5 rounded-full border border-border-hairline hover:bg-surface-elevated transition-colors flex items-center gap-1.5">
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                    Unused
+                </button>
+<button class="snap-start shrink-0 bg-surface-glass text-on-surface-variant font-label-md text-label-md px-4 py-1.5 rounded-full border border-border-hairline hover:bg-surface-elevated transition-colors flex items-center gap-1.5">
+<div class="w-1.5 h-1.5 rounded-full bg-success-emerald"></div>
+                    Completed
+                </button>
+<button class="snap-start shrink-0 bg-surface-glass text-on-surface-variant font-label-md text-label-md px-4 py-1.5 rounded-full border border-border-hairline hover:bg-surface-elevated transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">sort</span>
+                    Sort: Newest
+                </button>
+</div>
+</section>
+<!-- 2-Column Vertical Grid -->
+<section class="grid grid-cols-2 gap-gutter">
+<!-- Card 1 -->
+<div class="relative aspect-[9/16] rounded-xl overflow-hidden bg-surface-glass border border-border-hairline group cursor-pointer active:scale-95 transition-transform duration-200">
+<img class="w-full h-full object-cover absolute inset-0 mix-blend-luminosity opacity-80" data-alt="A dynamic action shot of a person performing a high-intensity interval training workout in a modern, moody gym setting. Dark tones with bright, cinematic rim lighting highlighting sweat and muscular effort. The aesthetic is high-end fitness content, shot on a premium smartphone camera." src="https://lh3.googleusercontent.com/aida-public/AB6AXuB0vfOVcq4dQXhFx_2Uh2vjFs2GW7mRy5cmZ1d9eXOyWH8DvVV_5ul8jRAF8comtxMC7P_v6cjCbZms0SavoCS-OoMNgSeQjZkT191jhEas9bPr2ZfiH2CldCE9KMxZ6hi_bTOJsKN68CUBuvjIbk4NQtVH6Pg0FRbgTQ1SK3yjkm1tvs4GJtyAQi8pBiZkWTYRfVFEiTRoiMQ66s03JJoaiyOLc3MVDzrlZH4plJ7QMCgtDyI2En8fG9HguxBa4vWQ9AJHNeXp3uFg"/>
+<div class="absolute inset-0 bg-gradient-to-b from-surface-obsidian/80 via-transparent to-surface-obsidian/95"></div>
+<div class="absolute top-2 left-2 flex items-center gap-1.5 bg-surface-glass/80 backdrop-blur-md px-2 py-1 rounded-full border border-border-hairline">
+<div class="w-2 h-2 rounded-full bg-primary shadow-[0_0_6px_rgba(142,213,255,0.8)]"></div>
+<span class="font-label-sm text-label-sm text-on-surface">Unused</span>
+</div>
+<div class="absolute top-2 right-2 bg-surface-glass/80 backdrop-blur-md px-1.5 py-0.5 rounded border border-border-hairline font-mono-data text-mono-data text-on-surface">0:45</div>
+<div class="absolute bottom-3 left-3 right-3 flex flex-col gap-2">
+<p class="font-label-md text-label-md text-on-surface truncate">HIIT_Burn_Ep4.mp4</p>
+</div>
+<button class="absolute bottom-2 right-2 w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+</div>
+<!-- Card 2 -->
+<div class="relative aspect-[9/16] rounded-xl overflow-hidden bg-surface-glass border border-border-hairline group cursor-pointer active:scale-95 transition-transform duration-200">
+<img class="w-full h-full object-cover absolute inset-0 mix-blend-luminosity opacity-40" data-alt="A top-down view of healthy meal prep containers arranged neatly on a dark slate countertop. Vibrant greens, cooked proteins, and grains pop against the moody, dark background. Professional food photography lighting, high-contrast and sharp focus." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBcqynf4SU1x0DUcBPZdfFBDwwawl6Q25OE1GlufWLrq7yaVqc64WljTgdTSA12h31fdWPu8q55tL3ElssUWy9quNGkGO30S60NoX4TvkVPV-ZWmtUovO3H0bMSQt3UAKXU5RJcVgGiNAeUkexML3Y7jJYrWuHy-xsEBnP-MxGwXVfpfHdr4xrpFC9B8go5OUaixTdekAY3Y6-1-sBe6ulG7VdCsxS5P6f9TCYJjqlUprKH5g7ThMhS-X0otWP3rOD24TdEAGYdrLcs"/>
+<div class="absolute inset-0 bg-gradient-to-b from-surface-obsidian/80 via-transparent to-surface-obsidian/95"></div>
+<div class="absolute top-2 left-2 flex items-center gap-1.5 bg-success-emerald/10 backdrop-blur-md px-2 py-1 rounded-full border border-success-emerald/30">
+<span class="material-symbols-outlined text-[14px] text-success-emerald font-bold">check</span>
+<span class="font-label-sm text-label-sm text-success-emerald">Completed</span>
+</div>
+<div class="absolute top-2 right-2 bg-surface-glass/80 backdrop-blur-md px-1.5 py-0.5 rounded border border-border-hairline font-mono-data text-mono-data text-on-surface">0:32</div>
+<div class="absolute bottom-3 left-3 right-3 flex flex-col gap-1">
+<p class="font-label-md text-label-md text-text-muted truncate">Protein_Meal_02.mp4</p>
+<div class="flex items-center gap-1 text-on-surface-variant font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">cloud_done</span> Saved
+                    </div>
+</div>
+</div>
+<!-- Card 3 -->
+<div class="relative aspect-[9/16] rounded-xl overflow-hidden bg-surface-glass border border-border-hairline group cursor-pointer active:scale-95 transition-transform duration-200">
+<img class="w-full h-full object-cover absolute inset-0 mix-blend-luminosity opacity-80" data-alt="A serene morning stretching routine captured in a minimalist, sun-drenched studio. High contrast shadows cast by window blinds across a dark wood floor. The mood is calm and focused, utilizing deep shadows and soft highlights." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCIZHpN0tIiWMxbEZAzOh1zPdispxe2FbhGcrR8hV87bdWpN2kdXBFQxlV9OgFDzb0MwRX9si24nsl-GkI10INkUmXCiO7KkqHqWQs7Ksmli7A_gyYunyMoxRuxm_vS_Xxssy-Zz8zmeXT44QcDlCUP0she9UF83PYou9OT2ADQk_PXa6LDOJnU7kXDgmbc9DS_Si4A0Lhr2nOozrjiyGx9g5ewpSFO6MszGfeQGUO_W-ft_kLOys4zioaaFTmnNxE96e6Gun2XDWoV"/>
+<div class="absolute inset-0 bg-gradient-to-b from-surface-obsidian/80 via-transparent to-surface-obsidian/95"></div>
+<div class="absolute top-2 left-2 flex items-center gap-1.5 bg-surface-glass/80 backdrop-blur-md px-2 py-1 rounded-full border border-border-hairline">
+<div class="w-2 h-2 rounded-full bg-primary shadow-[0_0_6px_rgba(142,213,255,0.8)]"></div>
+<span class="font-label-sm text-label-sm text-on-surface">Unused</span>
+</div>
+<div class="absolute top-2 right-2 bg-surface-glass/80 backdrop-blur-md px-1.5 py-0.5 rounded border border-border-hairline font-mono-data text-mono-data text-on-surface">0:58</div>
+<div class="absolute bottom-3 left-3 right-3 flex flex-col gap-2">
+<p class="font-label-md text-label-md text-on-surface truncate">Morning_Mobility.mp4</p>
+</div>
+<div class="absolute inset-0 border-2 border-primary rounded-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</div>
+<!-- Card 4 -->
+<div class="relative aspect-[9/16] rounded-xl overflow-hidden bg-surface-glass border border-border-hairline group cursor-pointer active:scale-95 transition-transform duration-200">
+<img class="w-full h-full object-cover absolute inset-0 mix-blend-luminosity opacity-80" data-alt="A close-up, low-angle shot of a heavy barbell loaded with plates during a bench press session in an underground-style powerlifting gym. Moody, industrial lighting with deep blacks and stark metallic reflections. Gritty, professional aesthetic." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAu0cuXwh0qBCxe4BenT4OwkrMwILD_COnLganhj8hdX0bPSQ5qXi-oGEwpDwJc3cBMyo0RyyPVeCaJVO_8lh88bAM7QrA5-xyUC4upzWpFAUIG8rTvhDXoh64ckBuuNXE_BlzF3PgyWbk21XkXan7X-LyrpczFDb40DKk0-mlGf14pKkdfVdMBHH0tLyLCOipwDMkhf9YOitLXVzisnJpw9tUywEbIxoxgxWIDyW9lrr9f9jHDaU0paS5zY0dwYli0gY4s0lGtNNTA"/>
+<div class="absolute inset-0 bg-gradient-to-b from-surface-obsidian/80 via-transparent to-surface-obsidian/95"></div>
+<div class="absolute top-2 left-2 flex items-center gap-1.5 bg-surface-glass/80 backdrop-blur-md px-2 py-1 rounded-full border border-border-hairline">
+<div class="w-2 h-2 rounded-full bg-primary shadow-[0_0_6px_rgba(142,213,255,0.8)]"></div>
+<span class="font-label-sm text-label-sm text-on-surface">Unused</span>
+</div>
+<div class="absolute top-2 right-2 bg-surface-glass/80 backdrop-blur-md px-1.5 py-0.5 rounded border border-border-hairline font-mono-data text-mono-data text-on-surface">1:12</div>
+<div class="absolute bottom-3 left-3 right-3 flex flex-col gap-2">
+<p class="font-label-md text-label-md text-on-surface truncate">Form_Check_Bench.mp4</p>
+</div>
+<div class="absolute inset-0 border-2 border-primary rounded-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity"></div>
+</div>
+</section>
+</main>
+<!-- Floating Bottom Action Bar -->
+<div class="fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-md z-50">
+<div class="bg-surface-glass/90 backdrop-blur-xl border border-border-hairline rounded-2xl p-2 flex gap-2 shadow-2xl shadow-primary/5">
+<button class="flex-1 bg-primary text-on-primary font-headline-md text-label-md py-3 px-4 rounded-xl flex justify-center items-center gap-2 hover:bg-primary-fixed active:scale-95 transition-all">
+<span class="material-symbols-outlined text-[20px]">download</span>
+                Batch Download (3 selected)
+            </button>
+<button aria-label="Shuffle Suggestions" class="w-12 shrink-0 bg-surface-elevated border border-border-hairline text-on-surface-variant hover:text-primary rounded-xl flex justify-center items-center active:scale-95 transition-all">
+<span class="material-symbols-outlined">shuffle</span>
+</button>
+</div>
+</div>
+<!-- Injecting some subtle grain overlay for tactile texture -->
+<style>
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+            opacity: 0.015;
+            pointer-events: none;
+            z-index: 9999;
+        }
+        /* Custom scrollbar hiding utility */
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</body></html>

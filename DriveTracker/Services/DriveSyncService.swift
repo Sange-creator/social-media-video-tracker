@@ -20,6 +20,9 @@ final class DriveSyncService {
         account: TikTokAccount,
         context: ModelContext
     ) async throws -> DriveSyncResult {
+        // Drive is queried first, then reconciled against the account's existing
+        // records. This makes missing files detectable without deleting local
+        // history or resetting an in-progress assignment.
         let rootItem = try await api.item(id: root.folderID, resourceKey: root.resourceKey)
         guard rootItem.isFolder else { throw DriveLinkError.invalidFolderLink }
 
@@ -42,6 +45,8 @@ final class DriveSyncService {
         var hasPersistentChanges = false
 
         var visitedFolders = Set<String>()
+        // Keep a visited set because shared Drive folder structures can expose
+        // the same folder more than once; recursion must never loop forever.
         let locatedVideos = try await recursivelyListVideos(
             folderID: root.folderID,
             resourceKey: root.resourceKey,
@@ -50,6 +55,7 @@ final class DriveSyncService {
         )
 
         for (index, located) in locatedVideos.enumerated() {
+            try Task.checkCancellation()
             // Large folders should never monopolize the main actor while the
             // user is scrolling or changing tabs.
             if index > 0, index.isMultiple(of: 40) {
@@ -119,6 +125,9 @@ final class DriveSyncService {
             }
         }
 
+        // Anything previously known but absent from this complete scan is
+        // marked missing. We retain it so old status events and assignments remain
+        // inspectable and can recover if the file returns to Drive.
         for video in accountVideos where
             !seenVideoKeys.contains(video.identityKey) && !video.isMissingFromDrive
         {

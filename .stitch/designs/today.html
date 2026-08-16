@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Social Media Video Tracker - Today</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "surface-bright": "#343a3e",
+                        "outline": "#87929a",
+                        "on-surface-variant": "#bdc8d1",
+                        "background": "#0f1418",
+                        "secondary-fixed": "#e0e0ff",
+                        "surface-container-lowest": "#0a0f12",
+                        "surface-elevated": "#1a1e2c",
+                        "error-container": "#93000a",
+                        "tertiary": "#4ee6aa",
+                        "on-primary-container": "#004965",
+                        "secondary-container": "#2f3aa3",
+                        "error": "#ffb4ab",
+                        "inverse-surface": "#dee3e8",
+                        "on-error-container": "#ffdad6",
+                        "tertiary-fixed-dim": "#45dfa4",
+                        "on-secondary-fixed-variant": "#2f3aa3",
+                        "tertiary-fixed": "#68fcbf",
+                        "surface-container-low": "#171c20",
+                        "surface-dim": "#0f1418",
+                        "on-background": "#dee3e8",
+                        "on-tertiary-container": "#004e35",
+                        "on-secondary-container": "#a8afff",
+                        "on-primary-fixed": "#001e2c",
+                        "on-secondary": "#131e8c",
+                        "surface-obsidian": "#090a0f",
+                        "on-tertiary-fixed": "#002114",
+                        "inverse-primary": "#00668a",
+                        "secondary-fixed-dim": "#bdc2ff",
+                        "text-slate": "#f8fafc",
+                        "warning-amber": "#fbbf24",
+                        "on-surface": "#dee3e8",
+                        "surface-glass": "#131622",
+                        "primary-container": "#38bdf8",
+                        "secondary": "#bdc2ff",
+                        "surface-container-high": "#252b2e",
+                        "surface-tint": "#7bd0ff",
+                        "primary-fixed-dim": "#7bd0ff",
+                        "surface-container": "#1b2024",
+                        "on-secondary-fixed": "#000767",
+                        "surface": "#0f1418",
+                        "on-tertiary": "#003825",
+                        "outline-variant": "#3e484f",
+                        "primary-fixed": "#c4e7ff",
+                        "on-error": "#690005",
+                        "tertiary-container": "#22c990",
+                        "surface-container-highest": "#303539",
+                        "border-hairline": "#222739",
+                        "on-primary-fixed-variant": "#004c69",
+                        "on-tertiary-fixed-variant": "#005137",
+                        "inverse-on-surface": "#2c3135",
+                        "surface-variant": "#303539",
+                        "primary": "#8ed5ff",
+                        "on-primary": "#00354a",
+                        "success-emerald": "#34d399",
+                        "text-muted": "#94a3b8"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "section-gap": "24px",
+                        "gutter": "12px",
+                        "stack-md": "14px",
+                        "stack-sm": "8px",
+                        "container-margin": "16px"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["Inter"],
+                        "mono-data": ["JetBrains Mono"],
+                        "headline-lg": ["Outfit"],
+                        "display-lg": ["Outfit"],
+                        "body-md": ["Inter"],
+                        "headline-md": ["Outfit"],
+                        "label-md": ["Inter"],
+                        "body-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["11px", { "lineHeight": "14px", "letterSpacing": "0.04em", "fontWeight": "600" }],
+                        "mono-data": ["12px", { "lineHeight": "16px", "fontWeight": "500" }],
+                        "headline-lg": ["28px", { "lineHeight": "34px", "letterSpacing": "-0.01em", "fontWeight": "700" }],
+                        "display-lg": ["36px", { "lineHeight": "44px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["20px", { "lineHeight": "26px", "fontWeight": "600" }],
+                        "label-md": ["13px", { "lineHeight": "18px", "letterSpacing": "0.01em", "fontWeight": "500" }],
+                        "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: #090a0f; /* surface-obsidian fallback */
+            color: #dee3e8; /* on-surface fallback */
+        }
+        
+        /* Hide scrollbar for horizontal scrolling feeds */
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
+
+        /* Radial Progress SVG Animation */
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.8s ease-in-out;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface-obsidian text-on-surface antialiased min-h-screen pb-24 md:hidden">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-surface-obsidian/80 backdrop-blur-md border-b border-border-hairline flex justify-between items-center px-container-margin h-16 transition-all duration-150">
+<div class="flex items-center gap-stack-sm">
+<h1 class="font-headline-lg text-headline-lg font-bold tracking-tighter text-primary">STUDIO.OS</h1>
+</div>
+<div class="flex items-center gap-stack-md text-on-surface-variant">
+<div class="flex items-center gap-1 bg-surface-glass border border-border-hairline rounded-full px-3 py-1 font-mono-data text-mono-data text-success-emerald shadow-[0_0_8px_rgba(52,211,153,0.1)]">
+<span class="w-1.5 h-1.5 rounded-full bg-success-emerald animate-pulse"></span>
+<span>SYNCED</span>
+</div>
+<div class="font-mono-data text-mono-data text-text-muted bg-surface-glass border border-border-hairline px-2 py-1 rounded">EST 03:00 PM</div>
+<button class="hover:bg-surface-bright/10 transition-colors p-2 rounded-full flex items-center justify-center">
+<span class="material-symbols-outlined">sensors</span>
+</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="pt-20 px-container-margin flex flex-col gap-section-gap">
+<!-- Daily Command Bento -->
+<section class="grid grid-cols-5 gap-gutter">
+<!-- Radial Progress (Left - 3 columns) -->
+<div class="col-span-3 bg-surface-glass border border-border-hairline rounded-xl p-4 flex flex-col items-center justify-between relative overflow-hidden backdrop-blur-sm">
+<div class="absolute inset-0 bg-gradient-to-br from-primary-container/5 to-transparent pointer-events-none"></div>
+<h2 class="font-label-md text-label-md text-text-muted w-full text-left mb-2">Today's Quota</h2>
+<div class="relative w-32 h-32 flex items-center justify-center my-2">
+<svg class="w-full h-full" viewbox="0 0 100 100">
+<!-- Background Circle -->
+<circle class="text-surface-container-highest stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<!-- Progress Circle (67% of 251.2 circumference ~ 168) -->
+<circle class="text-primary-container stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="83.2" stroke-linecap="round" stroke-width="8" style="filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.5));"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center">
+<span class="font-display-lg text-display-lg text-on-surface">6/9</span>
+<span class="font-label-sm text-label-sm text-primary">67% DONE</span>
+</div>
+</div>
+<button class="w-full mt-4 bg-surface-elevated hover:bg-surface-bright/20 border border-border-hairline text-on-surface font-label-md text-label-md py-2 rounded-lg flex items-center justify-center gap-2 transition-colors active:scale-95 duration-150">
+<span class="material-symbols-outlined text-[16px]">shuffle</span>
+                    Shuffle Unused
+                </button>
+</div>
+<!-- Quick Stats (Right - 2 columns) -->
+<div class="col-span-2 flex flex-col gap-gutter">
+<div class="bg-surface-glass border border-border-hairline rounded-xl p-4 flex flex-col justify-center flex-1 backdrop-blur-sm">
+<span class="font-display-lg text-display-lg text-on-surface leading-none mb-1">3</span>
+<span class="font-label-sm text-label-sm text-text-muted">VIDEOS LEFT</span>
+</div>
+<div class="bg-surface-glass border border-border-hairline rounded-xl p-3 flex flex-col justify-center flex-1 backdrop-blur-sm relative overflow-hidden">
+<div class="absolute -right-4 -top-4 w-16 h-16 bg-tertiary-container/10 rounded-full blur-xl"></div>
+<div class="flex items-center gap-2 mb-1">
+<span class="material-symbols-outlined text-[14px] text-tertiary">cloud_done</span>
+<span class="font-label-sm text-label-sm text-on-surface">Synced</span>
+</div>
+<span class="font-mono-data text-mono-data text-text-muted text-[10px]">Back: 14:55</span>
+</div>
+</div>
+</section>
+<!-- Copy Queue Strip (Floating Glass Card) -->
+<section class="bg-surface-elevated/90 backdrop-blur-xl border border-primary/20 rounded-xl p-4 shadow-[0_4px_20px_rgba(56,189,248,0.05)] relative overflow-hidden">
+<!-- Active edge highlight -->
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>
+<div class="flex items-center justify-between mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary">content_copy</span>
+<h3 class="font-label-md text-label-md text-primary">Up Next to Post</h3>
+</div>
+<span class="font-label-sm text-label-sm text-text-muted bg-surface-obsidian px-2 py-0.5 rounded border border-border-hairline">Queue: 1</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface mb-3 line-clamp-2">
+                "Top 5 morning stretches for absolute beginners. You won't believe #4! 🧘‍♂️✨ #fitness #morningroutine #stretch #health"
+            </p>
+<button class="w-full bg-primary hover:bg-primary/90 text-on-primary font-label-md text-label-md py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all active:scale-[0.98]">
+<span class="material-symbols-outlined text-[18px]">copy_all</span>
+                Copy Caption &amp; Hashtags
+            </button>
+</section>
+<!-- Active Account Feeds -->
+<section class="flex flex-col gap-stack-md">
+<div class="flex items-center justify-between pb-2 border-b border-border-hairline">
+<h2 class="font-headline-md text-headline-md text-on-surface">Account Streams</h2>
+</div>
+<!-- Feed 1: @FitLifeDaily -->
+<div class="flex flex-col gap-stack-sm mt-2">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full overflow-hidden border border-border-hairline relative">
+<img class="w-full h-full object-cover" data-alt="Close up portrait of a fit, athletic young woman in athletic wear, bright gym lighting, high contrast obsidian background, cinematic modern aesthetic, cyan and emerald neon rim lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuC6zAAsbacm5tcYvnT2E-Ctdg5fWUOyWERuRydVnP3m7WE8XC8qkkJzBbf5wXSS8VNESQqpekyeDFfa6KyV2q7qCrBhSvF2M_bTLDYYSzQvDl3eXNIFc2lOh5iUJikWjYbdsRYQzz0BCXKB9tqtiKkfx4Q1NS3NTeIfGV3GK5cbuycGKpsdFJfRWdGeFnlPGcHpMqDG0kiqyMsMtOTXRTxbky3Jyct1MVxCTEBNx0pCl9HZ4nZeQ7aRB6cVW1f4x7MK6_fekxtnzf75"/>
+</div>
+<span class="font-label-md text-label-md text-on-surface">@FitLifeDaily</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-mono-data text-mono-data text-text-muted">3/4</span>
+<div class="w-16 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-[75%] h-full bg-primary rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Horizontal Scroll -->
+<div class="flex overflow-x-auto gap-4 pb-4 pt-2 hide-scrollbar snap-x">
+<!-- Video Card 1 -->
+<div class="snap-start flex-none w-32 h-56 bg-surface-obsidian rounded-lg border border-border-hairline relative overflow-hidden group">
+<img class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" data-alt="Vertical mobile video thumbnail, fitness theme, kettlebell swing in a modern dark gym, dramatic moody lighting, cyan highlights, obsidian aesthetic, high resolution, sharp focus." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBgMhKwr7nQfd8-Lf6uSaymUfTUg1Or8XYp1oFe0LgGRsEuoKXaYZDatZFE-d9gg0Gjl_hfi6Rk_4Uuobzg_Ogu3n52JDUTjbhLMs-tTsMEPiDVSEuabQRv7wCn2xo_bMC83sXLjqlreyZvbEoJEa_Biqqes1aZZhoDdQYtAa5onimws-R8DWKUspsIrcrdgtxh6-XkpIjit-fVYdXMlUgdVcSnNh3obRY9hAPAoNT3dpeUSZzKQNj4EC1XN_v_mr_PjS4bDAolRGqV"/>
+<!-- Scrims -->
+<div class="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/80 to-transparent"></div>
+<div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/90 to-transparent"></div>
+<!-- Badges -->
+<div class="absolute top-2 left-2 flex flex-col gap-1">
+<span class="font-mono-data text-mono-data text-[9px] bg-black/60 backdrop-blur-md text-white px-1.5 py-0.5 rounded border border-white/10">0:42</span>
+</div>
+<div class="absolute top-2 right-2">
+<div class="w-2 h-2 rounded-full bg-success-emerald shadow-[0_0_4px_#34d399]"></div>
+</div>
+<!-- Actions -->
+<div class="absolute bottom-2 inset-x-2 flex justify-between items-center">
+<span class="font-label-sm text-label-sm text-white truncate w-20">Morning Routine</span>
+<button class="w-6 h-6 rounded bg-surface-glass/80 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white hover:bg-primary hover:text-on-primary transition-colors">
+<span class="material-symbols-outlined text-[14px]">download</span>
+</button>
+</div>
+</div>
+<!-- Video Card 2 -->
+<div class="snap-start flex-none w-32 h-56 bg-surface-obsidian rounded-lg border border-border-hairline relative overflow-hidden group">
+<img class="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" data-alt="Vertical mobile video thumbnail, fitness theme, preparing a healthy green smoothie, moody cinematic lighting, deep shadows, emerald accents, obsidian aesthetic, professional framing." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA81FRRSuZR5kVB1eQweE01B61WhT3mPQNcBmGKGyJgT6zCIdOpQ1PBgvUV5Z56CKdLriLM-QbGFPG6nTb9rgpsp-4zvp50rJurZMeVJNQc-ztJKwop7MSGOAq8jR7zdXd8o6ogFFbYsbZMTORRrE-HplyUWHf35iDQVWp-WUoZ15Y-Hooz9lroFelcjIsTpV_Kh7FRNfp2Bw4JMvA-53tn-wP36JCQWD_Wd1kJL0PQ60WRpzwTNxw-Z1-HNF6xL0TwHHT0EpgcwNeI"/>
+<div class="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/80 to-transparent"></div>
+<div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/90 to-transparent"></div>
+<div class="absolute top-2 left-2 flex flex-col gap-1">
+<span class="font-mono-data text-mono-data text-[9px] bg-black/60 backdrop-blur-md text-white px-1.5 py-0.5 rounded border border-white/10">0:58</span>
+</div>
+<div class="absolute top-2 right-2">
+<div class="w-2 h-2 rounded-full bg-success-emerald shadow-[0_0_4px_#34d399]"></div>
+</div>
+<div class="absolute bottom-2 inset-x-2 flex justify-between items-center">
+<span class="font-label-sm text-label-sm text-white truncate w-20">Green Smoothie</span>
+<button class="w-6 h-6 rounded bg-surface-glass/80 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white hover:bg-primary hover:text-on-primary transition-colors">
+<span class="material-symbols-outlined text-[14px]">download</span>
+</button>
+</div>
+</div>
+<!-- Add New / Empty Slot -->
+<div class="snap-start flex-none w-32 h-56 bg-surface-glass/50 rounded-lg border border-dashed border-border-hairline flex flex-col items-center justify-center gap-2 text-outline hover:text-primary hover:border-primary/50 transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-2xl">add_circle</span>
+<span class="font-label-sm text-label-sm">Add Video</span>
+</div>
+</div>
+</div>
+<!-- Feed 2: @TechFlowTrends -->
+<div class="flex flex-col gap-stack-sm mt-4">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full overflow-hidden border border-border-hairline bg-surface-bright flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px] text-on-surface-variant">terminal</span>
+</div>
+<span class="font-label-md text-label-md text-on-surface">@TechFlowTrends</span>
+<span class="font-label-sm text-label-sm bg-warning-amber/10 text-warning-amber px-1.5 py-0.5 rounded border border-warning-amber/20 ml-2">Carryover</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-mono-data text-mono-data text-text-muted">2/3</span>
+<div class="w-16 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+<div class="w-[66%] h-full bg-tertiary-container rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Horizontal Scroll -->
+<div class="flex overflow-x-auto gap-4 pb-4 pt-2 hide-scrollbar snap-x">
+<!-- Pending Video Card 1 -->
+<div class="snap-start flex-none w-32 h-56 bg-surface-obsidian rounded-lg border border-border-hairline relative overflow-hidden">
+<!-- Simulated pending render / processing state -->
+<div class="absolute inset-0 flex flex-col items-center justify-center bg-surface-glass/80 backdrop-blur-sm z-10">
+<span class="material-symbols-outlined text-text-muted mb-2 animate-spin">sync</span>
+<span class="font-mono-data text-mono-data text-text-muted text-[10px]">Processing</span>
+</div>
+<img class="w-full h-full object-cover opacity-30 grayscale" data-alt="Vertical mobile video thumbnail, tech theme, glowing mechanical keyboard close up, dark futuristic lighting, cyan and magenta hues, obsidian aesthetic, sharp details." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAzbzM26lzJ7WaErRUUPbIXTpWvSP_p1jhXYFOvFqRiFFtAdAh_x0nthNrM7o9U-i5qGgFvlesaYnEnKxNO3PrgIAZZKtmoCMukL6PcpNae_28p7n0bn1FsTvLf7ua78zeXE51HfGURZuGKQGCGO40Qom5BjgJLl0-3eeQSmRRu4TTw2Ug9b_tUrzcS8NLlEtxkvMuiv2YQImK-jA0b5wqTuim3fYu_40B9GCPi9OKtyJd_8P2y8CuFtwB8gATZoboaM1MlI0Fkapkf"/>
+</div>
+<!-- Empty Slot -->
+<div class="snap-start flex-none w-32 h-56 bg-surface-glass/50 rounded-lg border border-dashed border-border-hairline flex flex-col items-center justify-center gap-2 text-outline hover:text-primary hover:border-primary/50 transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-2xl">add_circle</span>
+<span class="font-label-sm text-label-sm">Add Video</span>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-6 w-full flex justify-center z-50 px-container-margin md:hidden">
+<div class="bg-surface-glass/80 backdrop-blur-xl border border-border-hairline w-[90%] max-w-md rounded-full shadow-2xl shadow-primary/5 flex items-center justify-around p-1">
+<!-- Active: Today / Home -->
+<button class="flex items-center justify-center bg-primary-container text-on-primary-container rounded-full w-12 h-12 shadow-[0_0_15px_rgba(123,208,255,0.3)] scale-90 duration-200 transition-transform">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">grid_view</span>
+</button>
+<!-- Inactive -->
+<button class="flex items-center justify-center text-outline w-12 h-12 hover:text-primary transition-all">
+<span class="material-symbols-outlined">layers</span>
+</button>
+<!-- Inactive -->
+<button class="flex items-center justify-center text-outline w-12 h-12 hover:text-primary transition-all">
+<span class="material-symbols-outlined">content_copy</span>
+</button>
+<!-- Inactive -->
+<button class="flex items-center justify-center text-outline w-12 h-12 hover:text-primary transition-all">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</nav>
+</body></html>

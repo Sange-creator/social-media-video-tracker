@@ -34,6 +34,16 @@ struct OnboardingView: View {
                         accountSetup
                     }
 
+                    #if DEBUG
+                    Button {
+                        seedDemoData()
+                    } label: {
+                        Label("Load Demo Workspace (Preview)", systemImage: "sparkles")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                    #endif
+
                     rulesCard
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -57,6 +67,75 @@ struct OnboardingView: View {
             if folderLink.isEmpty { folderLink = state.rootLink }
         }
     }
+
+    #if DEBUG
+    private func seedDemoData() {
+        let userID = state.auth.userID ?? "demo-user"
+
+        let fitLife = TikTokAccount(
+            googleUserID: userID,
+            driveFolderID: "fitlife-folder-id",
+            folderName: "FitLife Reels",
+            displayName: "@FitLifeDaily",
+            dailyQuota: 3,
+            iconSymbol: "dumbbell.fill",
+            iconColorHex: "#38BDF8"
+        )
+        context.insert(fitLife)
+
+        let techTrends = TikTokAccount(
+            googleUserID: userID,
+            driveFolderID: "tech-folder-id",
+            folderName: "Tech Trends",
+            displayName: "@TechFlowTrends",
+            dailyQuota: 2,
+            iconSymbol: "sparkles",
+            iconColorHex: "#34D399"
+        )
+        context.insert(techTrends)
+
+        let titles = [
+            "Morning_HIIT_Routine_Ep1.mp4",
+            "Protein_Meal_Prep_Guide.mp4",
+            "Mobility_Flow_10Min.mp4",
+            "Bench_Press_Form_Tip.mp4",
+            "AI_Video_Tools_2026.mp4",
+            "MacBook_Setup_Aesthetics.mp4"
+        ]
+
+        for (index, title) in titles.enumerated() {
+            let targetAccount = index < 4 ? fitLife : techTrends
+            let video = VideoAsset(
+                driveFileID: "demo-video-\(index)",
+                accountFolderID: targetAccount.driveFolderID,
+                googleUserID: targetAccount.googleUserID,
+                name: title,
+                folderPath: "\(targetAccount.folderName)/Q3 Drops",
+                mimeType: "video/mp4",
+                size: 48_000_000,
+                thumbnailLink: nil,
+                canDownload: true,
+                account: targetAccount
+            )
+            context.insert(video)
+
+            if index == 0 {
+                video.downloadedAt = Date()
+                video.uploadedAt = Date()
+            } else if index < 3 {
+                let assignment = DailyAssignment(
+                    localDayKey: DayKey.value(for: .now),
+                    slot: index,
+                    account: targetAccount,
+                    video: video
+                )
+                context.insert(assignment)
+            }
+        }
+
+        try? context.save()
+    }
+    #endif
 
     private var masthead: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -505,6 +584,9 @@ struct FolderAssociationView: View {
     @State private var dailyQuota = 3
     @State private var draftIconSymbol = "sparkles"
     @State private var draftIconColor = "#4F46E5"
+    @State private var draftTimeZoneID = ""
+    @State private var draftSuggestionStrategy = "shuffle"
+    @State private var draftAlbumName = ""
 
     private var selectedAccount: TikTokAccount? {
         accounts.first { $0.id == selectedAccountID }
@@ -523,7 +605,7 @@ struct FolderAssociationView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Set up this account")
                                 .font(.headline.weight(.bold))
-                            Text("Choose its name, folder label, and daily number of suggestions.")
+                            Text("Choose its name, folder label, time zone, and daily suggestions.")
                                 .font(.caption)
                                 .foregroundStyle(TrackerPalette.muted)
                         }
@@ -547,9 +629,33 @@ struct FolderAssociationView: View {
                         LabeledContent("Videos per day", value: "\(dailyQuota)")
                     }
                 } header: {
-                    Text("Managed account")
+                    TrackerSectionLabel(title: "Managed account")
                 } footer: {
                     Text("If you choose an existing account, this folder replaces that account’s current Drive folder. Previous tracking history is retained.")
+                }
+
+                Section {
+                    Picker("Target time zone", selection: $draftTimeZoneID) {
+                        Text("App default (\(state.reminderTimeZoneID.split(separator: "/").last ?? "ET"))").tag("")
+                        ForEach(USReminderTimeZone.allCases) { zone in
+                            Text("\(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
+                        }
+                    }
+
+                    Picker("Daily suggestion strategy", selection: $draftSuggestionStrategy) {
+                        Text("Random shuffle").tag("shuffle")
+                        Text("Newest uploads first").tag("newest")
+                        Text("Oldest inventory first").tag("oldest")
+                        Text("Alphabetical (A-Z)").tag("alphabetical")
+                    }
+
+                    TextField("Custom Photos album name (optional)", text: $draftAlbumName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    TrackerSectionLabel(title: "Time & uploading settings")
+                } footer: {
+                    Text("Set custom scheduling and Apple Photos export settings for this specific account.")
                 }
 
                 Section {
@@ -559,7 +665,7 @@ struct FolderAssociationView: View {
                         .font(.caption2.monospaced())
                         .foregroundStyle(TrackerPalette.muted)
                 } header: {
-                    Text("Tracked folder")
+                    TrackerSectionLabel(title: "Tracked folder")
                 } footer: {
                     Text("This folder may contain two, ten, or more nested folders. They all remain inside this one account, and every video will show its full folder path.")
                 }
@@ -569,7 +675,7 @@ struct FolderAssociationView: View {
                     Label("Other Google Drive folders are ignored", systemImage: "folder.badge.minus")
                     Label("\(dailyQuota) unused videos will be suggested each day", systemImage: "sparkles")
                 } header: {
-                    Text("What will happen")
+                    TrackerSectionLabel(title: "What will happen")
                 }
             }
             .trackerListStyle()
@@ -592,6 +698,9 @@ struct FolderAssociationView: View {
                                 dailyQuota: dailyQuota,
                                 iconSymbol: draftIconSymbol,
                                 iconColorHex: draftIconColor,
+                                targetTimeZoneID: draftTimeZoneID.isEmpty ? nil : draftTimeZoneID,
+                                suggestionStrategy: draftSuggestionStrategy,
+                                customAlbumName: draftAlbumName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draftAlbumName.trimmingCharacters(in: .whitespacesAndNewlines),
                                 context: context
                             )
                             if state.errorMessage == nil { dismiss() }

@@ -25,6 +25,7 @@ struct AnalyticsView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
+                    customTopHeader
                     dailyTrackerCard
                     overviewGrid
                     trendCard
@@ -34,14 +35,47 @@ struct AnalyticsView: View {
                     recentActivity
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 96)
             }
             .trackerScreen()
-            .navigationTitle("Analytics")
-            .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
         }
         .task { state.scheduleAnalyticsRefresh(context: context) }
+    }
+
+    private var customTopHeader: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ANALYTICS")
+                    .font(.system(size: 24, weight: .black, design: .rounded))
+                    .foregroundStyle(TrackerPalette.textPrimary)
+
+                Text("Performance & Quotas")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TrackerPalette.muted)
+            }
+
+            Spacer()
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(TrackerPalette.accent)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: TrackerPalette.accent.opacity(0.8), radius: 3)
+                Text("LIVE")
+                    .font(.system(size: 10, weight: .black))
+                    .foregroundStyle(TrackerPalette.accent)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(TrackerPalette.accent.opacity(0.12), in: Capsule())
+            .overlay {
+                Capsule().stroke(TrackerPalette.accent.opacity(0.3), lineWidth: 1)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
     }
 
     private var dailyTrackerCard: some View {
@@ -365,19 +399,37 @@ private struct AnalyticsMetricCard: View {
     let tint: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Image(systemName: symbol)
-                .font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(tint)
+                Spacer()
+                // Mini upward sparkline indicator
+                HStack(spacing: 2) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("LIVE")
+                        .font(.system(size: 9, weight: .heavy))
+                }
                 .foregroundStyle(tint)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(tint.opacity(0.12), in: Capsule())
+            }
+
             Text(value)
-                .font(.title2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.primary)
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
-            Text(detail)
-                .font(.caption2)
-                .foregroundStyle(TrackerPalette.muted)
+                .font(.system(size: 26, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(TrackerPalette.textPrimary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(TrackerPalette.textPrimary)
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(TrackerPalette.muted)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .trackerCard(padding: 14)

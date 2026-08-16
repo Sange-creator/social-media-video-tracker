@@ -274,7 +274,39 @@ struct GlobalCopyQueueCard: View {
                 trailing: "\(activeEntries.filter { $0.copiedAt == nil }.count) uncopied"
             )
 
-            if !state.hasGlobalCopyQueueSheet || isEditingLink {
+            if !state.hasGlobalCopyQueueSheet && !isEditingLink {
+                HStack(spacing: 12) {
+                    Image(systemName: "doc.text.badge.plus")
+                        .font(.title3)
+                        .foregroundStyle(TrackerPalette.accent)
+                        .frame(width: 36, height: 36)
+                        .background(TrackerPalette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Connect 1-Tap Captions Sheet")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(TrackerPalette.textPrimary)
+                        Text("Auto-fill titles & tags across all accounts")
+                            .font(.caption2)
+                            .foregroundStyle(TrackerPalette.muted)
+                    }
+
+                    Spacer()
+
+                    Button("Link") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isEditingLink = true
+                        }
+                    }
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color(hex: "#090A0F"))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(TrackerPalette.accent)
+                    .clipShape(Capsule())
+                    .buttonStyle(TrackerPressButtonStyle())
+                }
+            } else if !state.hasGlobalCopyQueueSheet || isEditingLink {
                 queueLinkSetup
             } else if let nextEntry {
                 Text(nextEntry.content)

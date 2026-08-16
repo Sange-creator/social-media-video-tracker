@@ -58,7 +58,18 @@ struct AssignmentEngine {
         let candidates = account.videos.filter {
             $0.status == .available && !$0.isMissingFromDrive && $0.canDownload
         }
-        let selected = Array(shuffle(candidates).prefix(needed))
+        let orderedCandidates: [VideoAsset]
+        switch account.suggestionStrategy {
+        case "newest":
+            orderedCandidates = candidates.sorted { ($0.driveModifiedAt ?? $0.createdAt) > ($1.driveModifiedAt ?? $1.createdAt) }
+        case "oldest":
+            orderedCandidates = candidates.sorted { ($0.driveModifiedAt ?? $0.createdAt) < ($1.driveModifiedAt ?? $1.createdAt) }
+        case "alphabetical":
+            orderedCandidates = candidates.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        default: // "shuffle"
+            orderedCandidates = shuffle(candidates)
+        }
+        let selected = Array(orderedCandidates.prefix(needed))
         let usedSlots = Set(
             account.assignments
                 .filter { $0.localDayKey == dayKey }

@@ -115,6 +115,19 @@ final class TikTokAccount {
     var copyQueueLastSyncedAt: Date?
     var copyQueueIssue: String?
 
+    // Time & Scheduling Settings
+    var targetTimeZoneID: String? = nil
+    var preferredSlot1Hour: Int = 9
+    var preferredSlot2Hour: Int = 13
+    var preferredSlot3Hour: Int = 20
+    var remindersEnabled: Bool = true
+
+    // Uploading & Storage Settings
+    var customAlbumName: String? = nil
+    var autoCompleteOnDownload: Bool = true
+    var strictChecksum: Bool = true
+    var suggestionStrategy: String = "shuffle" // "shuffle", "newest", "oldest", "alphabetical"
+
     @Relationship(deleteRule: .cascade, inverse: \VideoAsset.account)
     var videos: [VideoAsset]
 
@@ -138,7 +151,16 @@ final class TikTokAccount {
         googleEmail: String? = nil,
         isConfigured: Bool = true,
         iconSymbol: String? = nil,
-        iconColorHex: String? = nil
+        iconColorHex: String? = nil,
+        targetTimeZoneID: String? = nil,
+        preferredSlot1Hour: Int = 9,
+        preferredSlot2Hour: Int = 13,
+        preferredSlot3Hour: Int = 20,
+        remindersEnabled: Bool = true,
+        customAlbumName: String? = nil,
+        autoCompleteOnDownload: Bool = true,
+        strictChecksum: Bool = true,
+        suggestionStrategy: String = "shuffle"
     ) {
         let defaultIcon = AccountIconCatalog.style(for: id)
         self.id = id
@@ -158,6 +180,15 @@ final class TikTokAccount {
         self.isConfigured = isConfigured
         self.iconSymbol = iconSymbol ?? defaultIcon.symbol
         self.iconColorHex = iconColorHex ?? defaultIcon.colorHex
+        self.targetTimeZoneID = targetTimeZoneID
+        self.preferredSlot1Hour = preferredSlot1Hour
+        self.preferredSlot2Hour = preferredSlot2Hour
+        self.preferredSlot3Hour = preferredSlot3Hour
+        self.remindersEnabled = remindersEnabled
+        self.customAlbumName = customAlbumName
+        self.autoCompleteOnDownload = autoCompleteOnDownload
+        self.strictChecksum = strictChecksum
+        self.suggestionStrategy = suggestionStrategy
         self.videos = []
         self.assignments = []
         self.copyEntries = []

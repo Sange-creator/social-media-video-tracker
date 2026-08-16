@@ -251,6 +251,9 @@ final class AppState: ObservableObject {
         dailyQuota: Int,
         iconSymbol: String,
         iconColorHex: String,
+        targetTimeZoneID: String? = nil,
+        suggestionStrategy: String = "shuffle",
+        customAlbumName: String? = nil,
         context: ModelContext
     ) async {
         await perform {
@@ -277,12 +280,21 @@ final class AppState: ObservableObject {
                 dailyQuota: dailyQuota,
                 iconSymbol: iconSymbol,
                 iconColorHex: iconColorHex,
+                targetTimeZoneID: targetTimeZoneID,
+                suggestionStrategy: suggestionStrategy,
+                customAlbumName: customAlbumName,
                 link: resolvedLink,
                 context: context
             )
         }
     }
 
+    /// Reconciles the signed-in user's enabled Drive sources with SwiftData.
+    ///
+    /// The Drive scan is authoritative for file presence and metadata, while
+    /// local workflow state (assignments, downloads, and completion history)
+    /// is preserved. A sync writes only when the reconciliation changed data,
+    /// which keeps SwiftData-backed screens from needlessly reloading.
     func sync(context: ModelContext, announce: Bool = false) async {
         guard !isWorking else { return }
         isWorking = true
@@ -293,15 +305,20 @@ final class AppState: ObservableObject {
             let sources = try context.fetch(FetchDescriptor<DriveSource>())
                 .filter { $0.googleUserID == userID && $0.isEnabled }
             guard !sources.isEmpty else { throw DriveLinkError.empty }
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+                .filter { $0.googleUserID == userID && $0.isConfigured }
+            let accountsBySource = Dictionary(grouping: accounts, by: \.sourceID)
             var videoCount = 0
             var newVideoCount = 0
             for source in sources {
-                let linkedAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
-                    .filter { $0.sourceID == source.id }
+                try Task.checkCancellation()
+                let linkedAccounts = accountsBySource[source.id] ?? []
                 for account in linkedAccounts {
+                    try Task.checkCancellation()
                     // Older builds linked several child accounts to one parent source.
-                    // Preserve those accounts by scanning their own folder. New builds
-                    // always have one explicitly chosen folder per account.
+                    // Preserve those accounts by scanning their own folder. When a
+                    // source has one account, use the source root directly; this is
+                    // the current one-folder-per-account configuration.
                     let reference = linkedAccounts.count == 1
                         ? DriveFolderReference(
                             folderID: source.rootFolderID,
@@ -321,6 +338,8 @@ final class AppState: ObservableObject {
                     newVideoCount += result.newVideos
                 }
             }
+            // The copy queue is an optional secondary source. Its failure should
+            // be visible in Settings without discarding a successful Drive sync.
             if hasGlobalCopyQueueSheet {
                 do {
                     let result = try await syncCopyQueueNow(
@@ -352,6 +371,8 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Performs a throttled foreground refresh. The timestamp is reserved before
+    /// starting work so multiple views becoming active cannot launch duplicate scans.
     func refreshFromDriveIfNeeded(context: ModelContext) async {
         guard hasStarted, auth.isSignedIn, !isWorking else { return }
         if let lastAutomaticSyncAttempt,
@@ -474,10 +495,7 @@ final class AppState: ObservableObject {
     }
 
     func download(_ video: VideoAsset, context: ModelContext) async {
-        guard !activeDownloadIdentities.contains(video.identityKey) else { return }
-        activeDownloadIdentities.insert(video.identityKey)
-        toastMessage = "Download started for \(video.name)"
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        guard reserveDownload(video, kind: .initial) else { return }
         await performReservedDownload(video, context: context)
     }
 
@@ -500,7 +518,7 @@ final class AppState: ObservableObject {
             try await verifyOriginalFile(video: video, localURL: localURL)
             let photoID = try await photoLibrary.saveVideo(
                 at: localURL,
-                accountName: video.account?.displayName ?? "Account"
+                accountName: accountAlbumName(for: video)
             )
             try assignmentEngine.completeVerifiedDownload(
                 video,
@@ -521,24 +539,23 @@ final class AppState: ObservableObject {
     }
 
     func startParallelDownload(_ video: VideoAsset, context: ModelContext) {
-        guard !activeDownloadIdentities.contains(video.identityKey) else { return }
-        // Reserve the identity synchronously so a fast double tap cannot create
-        // two background URLSession tasks before the first Task begins running.
-        activeDownloadIdentities.insert(video.identityKey)
-        toastMessage = "Download started for \(video.name)"
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        guard reserveDownload(video, kind: .initial) else { return }
         let task = Task {
             await performReservedDownload(video, context: context)
         }
         activeDownloadTasks[video.identityKey] = task
     }
 
-    func downloadAllAssigned(for account: TikTokAccount, context: ModelContext) async {
+    func downloadAllAssigned(for account: TikTokAccount, context: ModelContext) {
         let assignedVideos = account.videos.filter {
-            ($0.status == .assigned || $0.status == .available) &&
+            $0.status == .assigned &&
             !$0.isMissingFromDrive &&
             $0.canDownload &&
             !activeDownloadIdentities.contains($0.identityKey)
+        }
+        guard !assignedVideos.isEmpty else {
+            toastMessage = "No suggested videos are ready to download."
+            return
         }
         for video in assignedVideos {
             startParallelDownload(video, context: context)
@@ -546,10 +563,12 @@ final class AppState: ObservableObject {
     }
 
     func cancelDownload(_ video: VideoAsset) {
+        guard activeDownloadIdentities.contains(video.identityKey) else { return }
         downloads.cancel(identity: video.identityKey)
         activeDownloadTasks[video.identityKey]?.cancel()
-        activeDownloadTasks.removeValue(forKey: video.identityKey)
-        activeDownloadIdentities.remove(video.identityKey)
+        // The task owns its reservation and releases it in defer. Keeping the
+        // identity reserved until URLSession confirms cancellation prevents a
+        // fast retry from colliding with the transfer that is still stopping.
         toastMessage = "Download canceled"
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
@@ -691,9 +710,15 @@ final class AppState: ObservableObject {
         }
     }
 
-    func redownload(_ video: VideoAsset, context: ModelContext) async {
-        guard !activeDownloadIdentities.contains(video.identityKey) else { return }
-        activeDownloadIdentities.insert(video.identityKey)
+    func startParallelRedownload(_ video: VideoAsset, context: ModelContext) {
+        guard reserveDownload(video, kind: .additionalCopy) else { return }
+        let task = Task {
+            await performReservedRedownload(video, context: context)
+        }
+        activeDownloadTasks[video.identityKey] = task
+    }
+
+    private func performReservedRedownload(_ video: VideoAsset, context: ModelContext) async {
         defer {
             activeDownloadIdentities.remove(video.identityKey)
             activeDownloadTasks.removeValue(forKey: video.identityKey)
@@ -711,31 +736,82 @@ final class AppState: ObservableObject {
             try await verifyOriginalFile(video: video, localURL: localURL)
             let photoID = try await photoLibrary.saveVideo(
                 at: localURL,
-                accountName: video.account?.displayName ?? "Account"
+                accountName: accountAlbumName(for: video)
             )
-            video.photoLocalIdentifier = photoID
-            video.downloadedAt = video.downloadedAt ?? .now
-            video.isMissingFromPhotos = false
-            video.updatedAt = .now
-            context.insert(
-                StatusEvent(
-                    kind: .downloadSucceeded,
-                    detail: "Explicitly re-downloaded to Photos",
-                    accountName: video.account?.displayName ?? "Unknown account",
-                    driveFileID: video.driveFileID,
-                    videoName: video.name,
-                    video: video
-                )
-            )
-            try context.save()
+            try recordRedownloadCompletion(video, photoID: photoID, context: context)
             toastMessage = "Downloaded again • \(video.name)"
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             scheduleBackup(context: context)
         } catch {
             if !isCancellation(error) {
                 errorMessage = error.localizedDescription
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
+    }
+
+    private func reserveDownload(_ video: VideoAsset, kind: DownloadKind) -> Bool {
+        guard !activeDownloadIdentities.contains(video.identityKey) else { return false }
+        errorMessage = nil
+
+        guard auth.userID == video.googleUserID else {
+            errorMessage = DriveAssociationError
+                .wrongGoogleAccount(video.account?.googleEmail)
+                .localizedDescription
+            return false
+        }
+        guard !video.isMissingFromDrive else {
+            errorMessage = DriveAssociationError.videoMissing.localizedDescription
+            return false
+        }
+        guard video.canDownload else {
+            errorMessage = DriveAPIError.itemNotDownloadable.localizedDescription
+            return false
+        }
+
+        switch kind {
+        case .initial:
+            guard video.status == .available || video.status == .assigned else {
+                errorMessage = "This video is no longer waiting to be downloaded. Refresh and try again."
+                return false
+            }
+        case .additionalCopy:
+            guard video.status == .uploaded else {
+                errorMessage = "Only completed videos can be downloaded again."
+                return false
+            }
+        }
+
+        // Reserve synchronously so repeated taps cannot create duplicate
+        // background URLSession tasks before the first Task starts running.
+        activeDownloadIdentities.insert(video.identityKey)
+        toastMessage = kind == .additionalCopy
+            ? "Downloading another copy of \(video.name)"
+            : "Download started for \(video.name)"
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        return true
+    }
+
+    private func recordRedownloadCompletion(
+        _ video: VideoAsset,
+        photoID: String?,
+        context: ModelContext
+    ) throws {
+        video.photoLocalIdentifier = photoID
+        video.downloadedAt = video.downloadedAt ?? .now
+        video.isMissingFromPhotos = false
+        video.updatedAt = .now
+        context.insert(
+            StatusEvent(
+                kind: .downloadSucceeded,
+                detail: "Explicitly re-downloaded to Photos",
+                accountName: video.account?.displayName ?? "Unknown account",
+                driveFileID: video.driveFileID,
+                videoName: video.name,
+                video: video
+            )
+        )
+        try context.save()
     }
 
     func verifyPhotoCopy(_ video: VideoAsset, context: ModelContext) {
@@ -771,6 +847,10 @@ final class AppState: ObservableObject {
     }
 
     func markCompletedOutsideApp(_ video: VideoAsset, context: ModelContext) {
+        guard !isDownloading(video) else {
+            errorMessage = "Cancel the active download before marking this video completed."
+            return
+        }
         do {
             try assignmentEngine.markCompletedOutsideApp(video, context: context)
             statusMessage = "\(video.name) was marked completed."
@@ -782,6 +862,10 @@ final class AppState: ObservableObject {
     }
 
     func undoUpload(_ video: VideoAsset, context: ModelContext) {
+        guard !isDownloading(video) else {
+            errorMessage = "Cancel the active download before changing its completed status."
+            return
+        }
         do {
             try assignmentEngine.undoUpload(video, context: context)
             scheduleBackup(context: context)
@@ -791,6 +875,10 @@ final class AppState: ObservableObject {
     }
 
     func resetDownload(_ video: VideoAsset, context: ModelContext) {
+        guard !isDownloading(video) else {
+            errorMessage = "Cancel the active download before resetting its status."
+            return
+        }
         do {
             try assignmentEngine.resetDownload(video, context: context)
             scheduleBackup(context: context)
@@ -1042,6 +1130,7 @@ final class AppState: ObservableObject {
     }
 
     private func purgeLegacyDemoData(context: ModelContext) {
+        #if !DEBUG
         do {
             let demoAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
                 .filter { $0.googleUserID == "demo-user" }
@@ -1062,6 +1151,7 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+        #endif
     }
 
     private func refreshAutomaticAccountIcons(context: ModelContext) {
@@ -1097,6 +1187,9 @@ final class AppState: ObservableObject {
         dailyQuota: Int,
         iconSymbol: String,
         iconColorHex: String,
+        targetTimeZoneID: String? = nil,
+        suggestionStrategy: String = "shuffle",
+        customAlbumName: String? = nil,
         link: String,
         context: ModelContext
     ) async throws {
@@ -1143,6 +1236,9 @@ final class AppState: ObservableObject {
             account.dailyQuota = min(30, max(1, dailyQuota))
             account.iconSymbol = automaticStyle.symbol
             account.iconColorHex = automaticStyle.colorHex
+            if let targetTimeZoneID { account.targetTimeZoneID = targetTimeZoneID }
+            account.suggestionStrategy = suggestionStrategy
+            if let customAlbumName { account.customAlbumName = customAlbumName }
             account.sourceID = source.id
             account.googleEmail = email
             account.googleUserID = userID
@@ -1162,7 +1258,10 @@ final class AppState: ObservableObject {
                 googleEmail: email,
                 isConfigured: true,
                 iconSymbol: automaticStyle.symbol,
-                iconColorHex: automaticStyle.colorHex
+                iconColorHex: automaticStyle.colorHex,
+                targetTimeZoneID: targetTimeZoneID,
+                customAlbumName: customAlbumName,
+                suggestionStrategy: suggestionStrategy
             )
             context.insert(account)
         }
@@ -1214,22 +1313,35 @@ final class AppState: ObservableObject {
             guard let video = videos.first(where: { $0.identityKey == identity }) else {
                 return
             }
+            let isAdditionalCopy = video.status == .uploaded
             try await verifyOriginalFile(video: video, localURL: localURL)
             let photoID = try await photoLibrary.saveVideo(
                 at: localURL,
-                accountName: video.account?.displayName ?? "Account"
+                accountName: accountAlbumName(for: video)
             )
-            try assignmentEngine.completeVerifiedDownload(
-                video,
-                photoIdentifier: photoID,
-                context: context
-            )
-            toastMessage = "Downloaded and completed • \(video.name)"
+            if isAdditionalCopy {
+                try recordRedownloadCompletion(video, photoID: photoID, context: context)
+                toastMessage = "Downloaded again • \(video.name)"
+            } else {
+                try assignmentEngine.completeVerifiedDownload(
+                    video,
+                    photoIdentifier: photoID,
+                    context: context
+                )
+                toastMessage = "Downloaded and completed • \(video.name)"
+            }
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             scheduleBackup(context: context)
         } catch {
             errorMessage = "Background download recovery failed: \(error.localizedDescription)"
         }
+    }
+
+    private func accountAlbumName(for video: VideoAsset) -> String {
+        if let custom = video.account?.customAlbumName?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+            return custom
+        }
+        return video.account?.displayName ?? "Account"
     }
 
     private func verifyKnownPhotoCopies(context: ModelContext) {
@@ -1482,11 +1594,16 @@ enum DriveAssociationError: LocalizedError {
         case .missingNames:
             "Enter both the account name and the tracked folder name."
         case let .wrongGoogleAccount(email):
-            "Connect \(email ?? "the Google account for this folder") before previewing this video."
+            "Connect \(email ?? "the Google account for this folder") to access this video."
         case .videoMissing:
             "This video is no longer available in the tracked Google Drive folder."
         }
     }
+}
+
+private enum DownloadKind {
+    case initial
+    case additionalCopy
 }
 
 enum DownloadIntegrityError: LocalizedError {

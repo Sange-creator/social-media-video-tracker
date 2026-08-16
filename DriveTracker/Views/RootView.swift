@@ -11,6 +11,11 @@ struct RootView: View {
     var body: some View {
         rootContent
             .task {
+                #if DEBUG
+                if accounts.isEmpty {
+                    seedDemoData(context: context)
+                }
+                #endif
                 await state.start(context: context)
             }
             .task(id: auth.isSignedIn) {
@@ -31,27 +36,27 @@ struct RootView: View {
             .overlay(alignment: .bottom) {
                 if let error = state.errorMessage {
                     ImportantMessageBanner(message: error)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, hasConfiguredAccount ? 70 : 14)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .allowsHitTesting(false)
                 } else if let message = state.toastMessage {
                     ToastMessageBanner(message: message)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, hasConfiguredAccount ? 70 : 14)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .allowsHitTesting(false)
                 } else if let message = state.statusMessage {
                     ToastMessageBanner(message: message)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, hasConfiguredAccount ? 70 : 14)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .allowsHitTesting(false)
                 }
             }
-            .animation(.easeOut(duration: 0.22), value: state.errorMessage)
-            .animation(.easeOut(duration: 0.22), value: state.toastMessage)
-            .animation(.easeOut(duration: 0.22), value: state.statusMessage)
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.errorMessage)
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.toastMessage)
+            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.statusMessage)
             .task(id: state.errorMessage) {
                 guard let message = state.errorMessage else { return }
                 try? await Task.sleep(for: .seconds(6))
@@ -92,29 +97,99 @@ struct RootView: View {
     private var hasConfiguredAccount: Bool {
         accounts.contains { $0.isConfigured }
     }
+
+    #if DEBUG
+    private func seedDemoData(context: ModelContext) {
+        let userID = state.auth.userID ?? "demo-user"
+
+        let fitLife = TikTokAccount(
+            googleUserID: userID,
+            driveFolderID: "fitlife-folder-id",
+            folderName: "FitLife Reels",
+            displayName: "@FitLifeDaily",
+            dailyQuota: 3,
+            iconSymbol: "dumbbell.fill",
+            iconColorHex: "#38BDF8"
+        )
+        context.insert(fitLife)
+
+        let techTrends = TikTokAccount(
+            googleUserID: userID,
+            driveFolderID: "tech-folder-id",
+            folderName: "Tech Trends",
+            displayName: "@TechFlowTrends",
+            dailyQuota: 2,
+            iconSymbol: "sparkles",
+            iconColorHex: "#34D399"
+        )
+        context.insert(techTrends)
+
+        let titles = [
+            "Morning_HIIT_Routine_Ep1.mp4",
+            "Protein_Meal_Prep_Guide.mp4",
+            "Mobility_Flow_10Min.mp4",
+            "Bench_Press_Form_Tip.mp4",
+            "AI_Video_Tools_2026.mp4",
+            "MacBook_Setup_Aesthetics.mp4"
+        ]
+
+        for (index, title) in titles.enumerated() {
+            let targetAccount = index < 4 ? fitLife : techTrends
+            let video = VideoAsset(
+                driveFileID: "demo-video-\(index)",
+                accountFolderID: targetAccount.driveFolderID,
+                googleUserID: targetAccount.googleUserID,
+                name: title,
+                folderPath: "\(targetAccount.folderName)/Q3 Drops",
+                mimeType: "video/mp4",
+                size: 48_000_000,
+                thumbnailLink: nil,
+                canDownload: true,
+                account: targetAccount
+            )
+            context.insert(video)
+
+            if index == 0 {
+                video.downloadedAt = Date()
+                video.uploadedAt = Date()
+            } else if index < 3 {
+                let assignment = DailyAssignment(
+                    localDayKey: DayKey.value(for: .now),
+                    slot: index,
+                    account: targetAccount,
+                    video: video
+                )
+                context.insert(assignment)
+            }
+        }
+
+        try? context.save()
+    }
+    #endif
 }
 
 private struct ToastMessageBanner: View {
     let message: String
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 10) {
             Image(systemName: "checkmark.circle.fill")
+                .font(.subheadline.bold())
                 .foregroundStyle(TrackerPalette.success)
             Text(message)
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(TrackerPalette.textPrimary)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(.regularMaterial)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(TrackerPalette.surface)
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(TrackerPalette.success.opacity(0.30), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(TrackerPalette.success.opacity(0.35), lineWidth: 0.5)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.40), radius: 16, y: 6)
     }
 }
 
@@ -123,23 +198,24 @@ private struct ImportantMessageBanner: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.circle.fill")
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline.bold())
                 .foregroundStyle(TrackerPalette.warning)
             Text(message)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.primary)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(TrackerPalette.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(.regularMaterial)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .background(TrackerPalette.surface)
         .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(TrackerPalette.warning.opacity(0.35), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(TrackerPalette.warning.opacity(0.40), lineWidth: 0.5)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: Color.black.opacity(0.40), radius: 16, y: 6)
     }
 }
 
@@ -151,75 +227,143 @@ private struct LaunchView: View {
         ZStack {
             TrackerPalette.canvas.ignoresSafeArea()
 
-            VStack(spacing: 20) {
+            VStack(spacing: 22) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(TrackerPalette.accent)
-                    Image(systemName: "arrow.down.to.line.compact")
-                        .font(.system(size: 31, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-                .frame(width: 68, height: 68)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [TrackerPalette.accent, TrackerPalette.success],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .shadow(color: TrackerPalette.accent.opacity(0.35), radius: 16, y: 6)
 
-                Text(title)
-                    .font(.title2.weight(.semibold))
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(TrackerPalette.muted)
+                    Image(systemName: "arrow.down.to.line.compact")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(Color(hex: "#090A0F"))
+                }
+                .frame(width: 72, height: 72)
+
+                VStack(spacing: 6) {
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(TrackerPalette.muted)
+                }
+
                 ProgressView()
                     .tint(TrackerPalette.accent)
+                    .controlSize(.regular)
             }
         }
     }
 }
 
 struct MainTabView: View {
-    @State private var selectedTab: TrackerTab = .today
+    @State private var selectedTab: Int = 0
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            TodayView()
-                .tag(TrackerTab.today)
-                .tabItem { Label("Today", systemImage: TrackerTab.today.symbol) }
+        ZStack(alignment: .bottom) {
+            ZStack {
+                TodayView()
+                    .opacity(selectedTab == 0 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 0)
 
-            AnalyticsView()
-                .tag(TrackerTab.analytics)
-                .tabItem { Label("Analytics", systemImage: TrackerTab.analytics.symbol) }
+                AnalyticsView()
+                    .opacity(selectedTab == 1 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 1)
 
-            LibraryView()
-                .tag(TrackerTab.library)
-                .tabItem { Label("Library", systemImage: TrackerTab.library.symbol) }
+                LibraryView()
+                    .opacity(selectedTab == 2 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 2)
 
-            AccountsView()
-                .tag(TrackerTab.accounts)
-                .tabItem { Label("Accounts", systemImage: TrackerTab.accounts.symbol) }
+                AccountsView()
+                    .opacity(selectedTab == 3 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 3)
 
-            SettingsView()
-                .tag(TrackerTab.settings)
-                .tabItem { Label("Settings", systemImage: TrackerTab.settings.symbol) }
+                SettingsView()
+                    .opacity(selectedTab == 4 ? 1 : 0)
+                    .allowsHitTesting(selectedTab == 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Bottom gradient veil anchored to absolute device bottom
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [
+                        TrackerPalette.canvas.opacity(0),
+                        TrackerPalette.canvas.opacity(0.85),
+                        TrackerPalette.canvas,
+                        TrackerPalette.canvas
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 70)
+
+                Rectangle()
+                    .fill(TrackerPalette.canvas)
+                    .frame(height: 70)
+            }
+            .frame(maxWidth: .infinity)
+            .allowsHitTesting(false)
+
+            floatingDock
         }
-        .toolbarBackground(.visible, for: .tabBar)
-        .toolbarBackground(.regularMaterial, for: .tabBar)
+        .ignoresSafeArea(.all, edges: .bottom)
     }
-}
 
-private enum TrackerTab: String, CaseIterable, Identifiable {
-    case today
-    case analytics
-    case library
-    case accounts
-    case settings
-
-    var id: String { rawValue }
-    var title: String { rawValue.capitalized }
-
-    var symbol: String {
-        switch self {
-        case .today: "calendar"
-        case .analytics: "chart.bar.xaxis"
-        case .library: "rectangle.stack"
-        case .accounts: "person.2"
-        case .settings: "gearshape"
+    private var floatingDock: some View {
+        HStack(spacing: 0) {
+            dockItem(index: 0, title: "Today", icon: "calendar")
+            dockItem(index: 1, title: "Analytics", icon: "chart.bar.xaxis")
+            dockItem(index: 2, title: "Library", icon: "rectangle.stack")
+            dockItem(index: 3, title: "Accounts", icon: "person.2")
+            dockItem(index: 4, title: "Settings", icon: "gearshape")
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
+        .background(
+            Color(hex: "#131622").opacity(0.95)
+                .background(.ultraThinMaterial)
+        )
+        .clipShape(Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color(hex: "#222739"), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.60), radius: 24, y: 10)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 28)
+    }
+
+    @ViewBuilder
+    private func dockItem(index: Int, title: String, icon: String) -> some View {
+        let isSelected = selectedTab == index
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                selectedTab = index
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: isSelected ? .bold : .medium))
+                    .foregroundStyle(isSelected ? TrackerPalette.accent : TrackerPalette.muted)
+
+                Text(title)
+                    .font(.system(size: 10, weight: isSelected ? .bold : .medium))
+                    .foregroundStyle(isSelected ? TrackerPalette.accent : TrackerPalette.muted)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(
+                isSelected ? TrackerPalette.accent.opacity(0.12) : Color.clear,
+                in: Capsule()
+            )
+        }
+        .buttonStyle(TrackerPressButtonStyle())
     }
 }

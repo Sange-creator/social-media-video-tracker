@@ -134,6 +134,19 @@ enum AnalyticsSnapshotService {
         }
         let activeAccountIDs = Set(activeAccounts.map(\.id))
         let downloaded = videos.filter { $0.downloadedAt != nil }
+        // Index once instead of repeatedly filtering the full library for
+        // every account and metric during an analytics refresh.
+        let videosByAccount = Dictionary(grouping: videos) { $0.account?.id }
+        let downloadedByAccount = Dictionary(grouping: downloaded) { $0.account?.id }
+        let todayDownloaded = downloaded.lazy.filter {
+            $0.downloadedAt.map(calendar.isDateInToday) ?? false
+        }
+        let weekDownloaded = downloaded.lazy.filter {
+            ($0.downloadedAt ?? .distantPast) >= weekStart
+        }
+        let monthDownloaded = downloaded.lazy.filter {
+            ($0.downloadedAt ?? .distantPast) >= monthStart
+        }
         let completedToday = videos.filter {
             guard let accountID = $0.account?.id,
                   activeAccountIDs.contains(accountID),
@@ -157,7 +170,8 @@ enum AnalyticsSnapshotService {
         let activeCopyEntries = copyEntries.filter { !$0.isMissingFromDrive }
 
         let accountSnapshots = accounts.map { account in
-            let accountDownloads = downloaded.filter { $0.account?.id == account.id }
+            let accountVideos = videosByAccount[account.id] ?? []
+            let accountDownloads = downloadedByAccount[account.id] ?? []
             return AnalyticsAccountSnapshot(
                 id: account.id,
                 name: account.displayName,
@@ -171,9 +185,7 @@ enum AnalyticsSnapshotService {
                     ($0.downloadedAt ?? .distantPast) >= weekStart
                 }.count,
                 total: accountDownloads.count,
-                completed: videos.filter {
-                    $0.account?.id == account.id && $0.uploadedAt != nil
-                }.count,
+                completed: accountVideos.lazy.filter { $0.uploadedAt != nil }.count,
                 dayCounts: dayCounts(
                     dates: accountDownloads.compactMap(\.downloadedAt),
                     days: 30,
@@ -199,15 +211,9 @@ enum AnalyticsSnapshotService {
             dailyTarget: activeAccounts.reduce(0) { $0 + $1.dailyQuota },
             completedToday: completedToday,
             activeAccountCount: activeAccounts.count,
-            todayCount: downloaded.filter {
-                $0.downloadedAt.map(calendar.isDateInToday) ?? false
-            }.count,
-            weekCount: downloaded.filter {
-                ($0.downloadedAt ?? .distantPast) >= weekStart
-            }.count,
-            monthCount: downloaded.filter {
-                ($0.downloadedAt ?? .distantPast) >= monthStart
-            }.count,
+            todayCount: todayDownloaded.count,
+            weekCount: weekDownloaded.count,
+            monthCount: monthDownloaded.count,
             allTimeDownloaded: downloaded.count,
             completedCount: completedCount,
             completionRate: downloaded.isEmpty
@@ -220,7 +226,7 @@ enum AnalyticsSnapshotService {
             }.count,
             redownloadCount: max(0, userDownloadEvents.count - inAppDownloadedKeys.count),
             downloadedBytes: downloaded.reduce(0) { $0 + ($1.size ?? 0) },
-            missingFromPhotos: downloaded.filter(\.isMissingFromPhotos).count,
+            missingFromPhotos: downloaded.lazy.filter(\.isMissingFromPhotos).count,
             averagePerActiveDay: activeDayCounts.isEmpty
                 ? 0
                 : Double(downloaded.count) / Double(activeDayCounts.count),

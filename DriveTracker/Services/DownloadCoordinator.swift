@@ -3,6 +3,7 @@ import Foundation
 enum DownloadCoordinatorError: LocalizedError {
     case missingTemporaryFile
     case cancelled
+    case httpStatus(Int)
 
     var errorDescription: String? {
         switch self {
@@ -10,6 +11,17 @@ enum DownloadCoordinatorError: LocalizedError {
             "The completed download could not be found."
         case .cancelled:
             "The download was cancelled."
+        case let .httpStatus(code):
+            switch code {
+            case 401:
+                "Google Drive authorization expired. Reconnect your Google account and try again."
+            case 403:
+                "Google Drive does not permit downloading this video."
+            case 404:
+                "The video could not be found in Google Drive. Sync the folder and try again."
+            default:
+                "Google Drive could not download the video (error \(code))."
+            }
         }
     }
 }
@@ -80,6 +92,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         let identity = identityByTask.removeValue(forKey: taskID) ?? taskDescription
         if let identity {
             progressByIdentity.removeValue(forKey: identity)
+            lastProgressUpdateByIdentity.removeValue(forKey: identity)
         }
         if let continuation = continuations.removeValue(forKey: taskID) {
             continuation.resume(with: result)
@@ -145,6 +158,10 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
     ) {
         let taskID = downloadTask.taskIdentifier
         do {
+            if let response = downloadTask.response as? HTTPURLResponse,
+               !(200 ... 299).contains(response.statusCode) {
+                throw DownloadCoordinatorError.httpStatus(response.statusCode)
+            }
             let directory = FileManager.default.urls(
                 for: .cachesDirectory,
                 in: .userDomainMask

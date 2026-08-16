@@ -2,32 +2,85 @@ import SwiftUI
 import UIKit
 
 enum TrackerPalette {
-    static let canvas = Color(uiColor: .systemGroupedBackground)
-    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
-    static let raised = Color(uiColor: .tertiarySystemGroupedBackground)
-    static let line = Color(uiColor: .separator).opacity(0.45)
-    static let muted = Color(uiColor: .secondaryLabel)
-    static let accent = Color(uiColor: .systemBlue)
-    static let success = Color(uiColor: .systemGreen)
-    static let warning = Color(uiColor: .systemOrange)
-    static let danger = Color(uiColor: .systemRed)
+    static let canvas = Color(hex: "#090A0F")
+    static let surface = Color(hex: "#131622")
+    static let raised = Color(hex: "#1A1E2C")
+    static let elevated = Color(hex: "#222739")
+    static let line = Color(white: 1.0).opacity(0.08)
+    static let cardBorder = Color(white: 1.0).opacity(0.10)
+    static let muted = Color(hex: "#94A3B8")
+    static let textPrimary = Color(hex: "#F8FAFC")
+    static let accent = Color(hex: "#38BDF8")
+    static let success = Color(hex: "#34D399")
+    static let warning = Color(hex: "#FBBF24")
+    static let danger = Color(hex: "#F87171")
+}
+
+struct RadialQuotaProgress: View {
+    let completed: Int
+    let quota: Int
+    var size: CGFloat = 58
+    var lineWidth: CGFloat = 5.5
+    var showLabel: Bool = true
+
+    private var progress: Double {
+        guard quota > 0 else { return 0 }
+        return min(1.0, Double(completed) / Double(quota))
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(TrackerPalette.line, lineWidth: lineWidth)
+
+            Circle()
+                .trim(from: 0, to: CGFloat(progress))
+                .stroke(
+                    LinearGradient(
+                        colors: [TrackerPalette.accent, TrackerPalette.success],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .animation(.spring(response: 0.5, dampingFraction: 0.75), value: progress)
+
+            if showLabel {
+                VStack(spacing: 0) {
+                    Text("\(completed)")
+                        .font(.system(size: size * 0.32, weight: .bold, design: .rounded))
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                    Text("/\(quota)")
+                        .font(.system(size: size * 0.18, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(TrackerPalette.muted)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+    }
 }
 
 struct StatusPill: View {
     let status: VideoStatus
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Circle()
                 .fill(status.tint)
-                .frame(width: 6, height: 6)
+                .frame(width: 5, height: 5)
             Text(status.title.capitalized)
+                .font(.system(size: 9.5, weight: .bold))
+                .lineLimit(1)
+                .fixedSize()
         }
-        .font(.caption.weight(.semibold))
         .foregroundStyle(status.tint)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(status.tint.opacity(0.12), in: Capsule())
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(status.tint.opacity(0.14), in: Capsule())
+        .overlay {
+            Capsule().stroke(status.tint.opacity(0.25), lineWidth: 0.5)
+        }
     }
 }
 
@@ -36,17 +89,20 @@ struct FilterChip: View {
     let selected: Bool
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
             Text(title.capitalized).lineLimit(1)
-            Image(systemName: selected ? "xmark" : "chevron.down")
-                .font(.system(size: 9, weight: .bold))
+            Image(systemName: selected ? "checkmark" : "chevron.down")
+                .font(.system(size: 8, weight: .bold))
         }
         .font(.subheadline.weight(.medium))
-        .foregroundStyle(selected ? Color.white : Color.primary)
+        .foregroundStyle(selected ? Color(hex: "#090A0F") : TrackerPalette.textPrimary)
         .padding(.horizontal, 13)
-        .frame(height: 36)
+        .frame(height: 34)
         .background(selected ? TrackerPalette.accent : TrackerPalette.surface, in: Capsule())
-        .overlay { Capsule().stroke(TrackerPalette.line, lineWidth: selected ? 0 : 0.5) }
+        .overlay {
+            Capsule().stroke(selected ? Color.clear : TrackerPalette.line, lineWidth: 0.5)
+        }
+        .shadow(color: selected ? TrackerPalette.accent.opacity(0.3) : .clear, radius: 8, y: 2)
     }
 }
 
@@ -56,14 +112,18 @@ struct TrackerSectionLabel: View {
 
     var body: some View {
         HStack {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
+            Text(title.uppercased())
+                .font(.caption.weight(.bold))
+                .tracking(0.6)
+                .foregroundStyle(TrackerPalette.muted)
             Spacer()
             if let trailing {
                 Text(trailing)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(TrackerPalette.muted)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(TrackerPalette.accent)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(TrackerPalette.accent.opacity(0.10), in: Capsule())
             }
         }
     }
@@ -72,15 +132,15 @@ struct TrackerSectionLabel: View {
 struct TrackerMetric: View {
     let value: String
     let label: String
-    var tint: Color = .primary
+    var tint: Color = TrackerPalette.textPrimary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(value)
-                .font(.title3.monospacedDigit().weight(.semibold))
+                .font(.system(.title3, design: .rounded).monospacedDigit().weight(.bold))
                 .foregroundStyle(tint)
             Text(label)
-                .font(.footnote)
+                .font(.caption2.weight(.medium))
                 .foregroundStyle(TrackerPalette.muted)
         }
     }
@@ -91,6 +151,7 @@ struct TrackerActionButtonStyle: ButtonStyle {
         case primary
         case secondary
         case quiet
+        case danger
     }
 
     let kind: Kind
@@ -101,12 +162,13 @@ struct TrackerActionButtonStyle: ButtonStyle {
             .foregroundStyle(foreground)
             .padding(.horizontal, 14)
             .frame(minHeight: 44)
-            .background(background.opacity(configuration.isPressed ? 0.78 : 1))
+            .background(background.opacity(configuration.isPressed ? 0.82 : 1))
             .overlay {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(border, lineWidth: 0.5)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: kind == .primary ? TrackerPalette.accent.opacity(0.25) : .clear, radius: 8, y: 3)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .sensoryFeedback(
@@ -119,24 +181,28 @@ struct TrackerActionButtonStyle: ButtonStyle {
 
     private var foreground: Color {
         switch kind {
-        case .primary: .white
-        case .secondary: .primary
+        case .primary: Color(hex: "#090A0F")
+        case .secondary: TrackerPalette.textPrimary
         case .quiet: TrackerPalette.muted
+        case .danger: TrackerPalette.danger
         }
     }
 
     private var background: Color {
         switch kind {
         case .primary: TrackerPalette.accent
-        case .secondary: Color(uiColor: .secondarySystemFill)
+        case .secondary: TrackerPalette.surface
         case .quiet: .clear
+        case .danger: TrackerPalette.danger.opacity(0.15)
         }
     }
 
     private var border: Color {
         switch kind {
-        case .primary: TrackerPalette.accent
-        case .secondary, .quiet: TrackerPalette.line
+        case .primary: TrackerPalette.accent.opacity(0.5)
+        case .secondary: TrackerPalette.line
+        case .quiet: .clear
+        case .danger: TrackerPalette.danger.opacity(0.3)
         }
     }
 }
@@ -169,6 +235,7 @@ extension View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(TrackerPalette.line, lineWidth: 0.5)
             }
+            .shadow(color: Color.black.opacity(0.28), radius: 12, y: 4)
     }
 
     func trackerScreen() -> some View {
@@ -184,7 +251,7 @@ extension View {
 extension VideoStatus {
     var tint: Color {
         switch self {
-        case .available: TrackerPalette.muted
+        case .available: TrackerPalette.accent
         case .assigned: TrackerPalette.warning
         case .downloaded: TrackerPalette.accent
         case .uploaded: TrackerPalette.success
@@ -200,27 +267,27 @@ struct AccountIdentityIcon: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: size * 0.34, weight: .medium))
+            .font(.system(size: size * 0.34, weight: .bold))
             .foregroundStyle(Color(hex: colorHex))
             .frame(width: size, height: size)
-            .background(Color(hex: colorHex).opacity(0.11))
+            .background(Color(hex: colorHex).opacity(0.14))
             .clipShape(Circle())
             .overlay {
-                Circle().stroke(Color(hex: colorHex).opacity(0.16), lineWidth: 0.5)
+                Circle().stroke(Color(hex: colorHex).opacity(0.28), lineWidth: 0.5)
             }
             .overlay(alignment: .bottomTrailing) {
                 if let badge {
                     Text(badge)
-                        .font(.system(size: max(8, size * 0.18), weight: .semibold, design: .monospaced))
+                        .font(.system(size: max(8, size * 0.18), weight: .bold, design: .monospaced))
                         .foregroundStyle(TrackerPalette.muted)
                         .frame(minWidth: size * 0.38, minHeight: size * 0.38)
-                        .padding(.horizontal, 2)
+                        .padding(.horizontal, 3)
                         .background(TrackerPalette.surface)
                         .clipShape(RoundedRectangle(cornerRadius: 4))
                         .overlay {
-                            RoundedRectangle(cornerRadius: 4).stroke(TrackerPalette.line, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 4).stroke(TrackerPalette.line, lineWidth: 0.5)
                         }
-                        .offset(x: size * 0.10, y: size * 0.10)
+                        .offset(x: size * 0.08, y: size * 0.08)
                 }
             }
     }
@@ -231,12 +298,13 @@ struct VideoThumbnailView: View {
     let video: VideoAsset
     var width: CGFloat = 108
     var height: CGFloat = 144
+    var cornerRadius: CGFloat = 12
 
     @State private var image: UIImage?
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(TrackerPalette.raised)
 
             if let image {
@@ -248,12 +316,19 @@ struct VideoThumbnailView: View {
                     .font(.title3.weight(.medium))
                     .foregroundStyle(TrackerPalette.muted)
             }
+
+            // Dark scrim overlay for high contrast metadata
+            LinearGradient(
+                colors: [Color.black.opacity(0.35), Color.clear, Color.black.opacity(0.70)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
         .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(TrackerPalette.line, lineWidth: 1)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(TrackerPalette.line, lineWidth: 0.5)
         }
         .task(id: video.thumbnailLink) {
             image = await state.thumbnailImage(for: video)
@@ -291,7 +366,7 @@ struct AccountIconPicker: View {
                         } label: {
                             Image(systemName: option)
                                 .font(.system(size: 18, weight: .bold))
-                                .foregroundStyle(symbol == option ? .white : TrackerPalette.muted)
+                                .foregroundStyle(symbol == option ? Color(hex: "#090A0F") : TrackerPalette.muted)
                                 .frame(width: 42, height: 42)
                                 .background(
                                     symbol == option
@@ -302,7 +377,7 @@ struct AccountIconPicker: View {
                                 .overlay {
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                                         .stroke(
-                                            symbol == option ? .white.opacity(0.45) : TrackerPalette.line,
+                                            symbol == option ? Color.white.opacity(0.45) : TrackerPalette.line,
                                             lineWidth: 1
                                         )
                                 }
