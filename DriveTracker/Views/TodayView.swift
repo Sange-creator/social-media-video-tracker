@@ -22,7 +22,7 @@ struct TodayView: View {
         activeAccounts.reduce(0) { sum, account in
             sum + account.videos.filter { video in
                 guard let uploadedAt = video.uploadedAt else { return false }
-                return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
+                return DayKey.isToday(uploadedAt)
             }.count
         }
     }
@@ -67,13 +67,11 @@ struct TodayView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 120)
-                .transaction { transaction in
-                    transaction.animation = nil
-                }
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
             .refreshable {
+                await state.checkForDriveChanges(context: context)
                 if state.hasRootFolder {
                     await state.sync(context: context, announce: false)
                 } else {
@@ -82,9 +80,9 @@ struct TodayView: View {
             }
         }
         .task {
-            await state.refreshFromDriveIfNeeded(context: context)
             try? state.ensureToday(context: context)
             await state.scheduleDownloadNotifications(context: context)
+            await state.checkForDriveChanges(context: context)
         }
     }
 
@@ -99,7 +97,6 @@ struct TodayView: View {
                     Circle()
                         .fill(state.isWorking ? TrackerPalette.warning : TrackerPalette.success)
                         .frame(width: 6, height: 6)
-                        .shadow(color: (state.isWorking ? TrackerPalette.warning : TrackerPalette.success).opacity(0.8), radius: 3)
                     Text(state.isWorking ? "Syncing Drive..." : "All Folders Synced")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(TrackerPalette.muted)
@@ -219,18 +216,26 @@ struct TodayView: View {
         }
     }
 
-    private func formattedDate(_ date: Date) -> String {
+    private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.timeZone = selectedUSZone.timeZone
         formatter.dateFormat = "EEEE, MMMM d"
-        return formatter.string(from: date)
+        return formatter
+    }()
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter
+    }()
+
+    private func formattedDate(_ date: Date) -> String {
+        Self.dateFormatter.timeZone = selectedUSZone.timeZone
+        return Self.dateFormatter.string(from: date)
     }
 
     private func formattedTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeZone = selectedUSZone.timeZone
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+        Self.timeFormatter.timeZone = selectedUSZone.timeZone
+        return Self.timeFormatter.string(from: date)
     }
 
     private var activeSlotNumber: Int {
@@ -297,7 +302,7 @@ private struct TodayAccountRow: View {
         account.videos.filter { video in
             if video.status == .assigned || video.status == .downloaded { return true }
             guard let uploadedAt = video.uploadedAt else { return false }
-            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
+            return DayKey.isToday(uploadedAt)
         }
     }
 
@@ -349,6 +354,7 @@ private struct TodayAccountRow: View {
                     }
                     .padding(.vertical, 2)
                 }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
             }
         }
         .trackerCard(padding: 14)
@@ -495,7 +501,7 @@ private struct AccountTodaySection: View {
         account.videos.filter { video in
             if video.status == .assigned || video.status == .downloaded { return true }
             guard let uploadedAt = video.uploadedAt else { return false }
-            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
+            return DayKey.isToday(uploadedAt)
         }
         .sorted {
             let lhsSlot = $0.activeAssignment?.slot ?? Int.max

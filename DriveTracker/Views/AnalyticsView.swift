@@ -17,7 +17,9 @@ struct AnalyticsView: View {
     }
 
     private var snapshot: AnalyticsSnapshot {
-        guard state.analyticsSnapshot.googleUserID == state.auth.userID else { return .empty }
+        // Analytics is derived from the local SwiftData store. Keep showing
+        // the preserved local history when Google sign-in is unavailable;
+        // Drive authentication should not hide records already on-device.
         return state.analyticsSnapshot
     }
 
@@ -40,6 +42,9 @@ struct AnalyticsView: View {
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
+            .refreshable {
+                state.scheduleAnalyticsRefresh(context: context)
+            }
         }
         .task { state.scheduleAnalyticsRefresh(context: context) }
     }
@@ -107,21 +112,10 @@ struct AnalyticsView: View {
                 )
             }
 
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Rectangle().fill(TrackerPalette.raised)
-                    Rectangle()
-                        .fill(
-                            dailyProgress >= 1
-                                ? TrackerPalette.success
-                                : TrackerPalette.accent
-                        )
-                        .frame(
-                            width: geometry.size.width * min(max(dailyProgress, 0), 1)
-                        )
-                }
-            }
-            .frame(height: 4)
+            ProgressView(value: min(max(dailyProgress, 0), 1))
+                .tint(dailyProgress >= 1 ? TrackerPalette.success : TrackerPalette.accent)
+                .background(TrackerPalette.raised, in: Capsule())
+                .frame(height: 4)
 
             HStack {
                 Text("\(snapshot.todayCount) downloaded today")

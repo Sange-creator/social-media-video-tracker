@@ -48,30 +48,28 @@ final class AppState: ObservableObject {
     }
 
     let auth: GoogleAuthService
+    let api: DriveAPIClient
     let downloads: DownloadCoordinator
     let notifications: DownloadNotificationService
 
     private let defaults: UserDefaults
-    private let api: DriveAPIClient
     private let syncService: DriveSyncService
     private let copyQueueService: CopyQueueService
     private let photoLibrary = PhotoLibraryService()
     private let assignmentEngine = AssignmentEngine()
     private let backupService: BackupService
-    private let thumbnailCache = NSCache<NSString, UIImage>()
-    private var thumbnailTasks: [String: Task<UIImage?, Never>] = [:]
     private var backupTask: Task<Void, Never>?
     private var analyticsTask: Task<Void, Never>?
     private var isBackingUp = false
     private var backupRequestedWhileRunning = false
     private var startupMaintenanceTask: Task<Void, Never>?
+    private var changesMonitoringTask: Task<Void, Never>?
     private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
     private var copyQueueSyncTaskKey: String?
     private var copyQueueSyncTaskToken: UUID?
     private var activeCopyQueueGoogleUserID: String?
     private var hasStarted = false
     private var lastAutomaticSyncAttempt: Date?
-    private let automaticDriveRefreshInterval: TimeInterval = 45
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -99,8 +97,6 @@ final class AppState: ObservableObject {
         self.globalCopyQueueResourceKey = defaults.string(forKey: Keys.globalCopyQueueResourceKey)
         self.globalCopyQueueLastSyncedAt =
             defaults.object(forKey: Keys.globalCopyQueueLastSyncedAt) as? Date
-        self.thumbnailCache.countLimit = 60
-        self.thumbnailCache.totalCostLimit = 48 * 1_024 * 1_024
         defaults.set(self.globalCopyQueueLink, forKey: Keys.globalCopyQueueLink)
     }
 
@@ -126,6 +122,9 @@ final class AppState: ObservableObject {
         if let userID = auth.userID {
             activateCopyQueueConfiguration(for: userID)
         }
+        // Build analytics from the preserved local store even when OAuth
+        // configuration is unavailable. Drive sync remains auth-gated.
+        scheduleAnalyticsRefresh(context: context)
         guard auth.isSignedIn, let userID = auth.userID else { return }
         do {
             if !defaults.bool(forKey: Keys.suppressAutomaticRestore),
@@ -144,7 +143,6 @@ final class AppState: ObservableObject {
                 context: context
             )
             try ensureToday(context: context)
-            scheduleAnalyticsRefresh(context: context)
             if hasSources { scheduleStartupMaintenance(context: context) }
         } catch {
             errorMessage = error.localizedDescription
@@ -203,6 +201,28 @@ final class AppState: ObservableObject {
             if hasSources {
                 scheduleStartupMaintenance(context: context)
             }
+        }
+    }
+
+    func restoreBackupNow(context: ModelContext) async {
+        await perform {
+            guard let userID = auth.userID else { throw GoogleAuthError.notSignedIn }
+            guard let backup = try await backupService.restoreFromDriveBackup(
+                context: context,
+                expectedGoogleUserID: userID
+            ) else {
+                statusMessage = "No backup found in Google Drive."
+                return
+            }
+            rootLink = backup.rootLink
+            rootFolderID = backup.rootFolderID
+            rootResourceKey = backup.rootResourceKey
+            applyCopyQueueConfiguration(from: backup)
+            _ = try activateDriveSourceConfiguration(for: userID, context: context)
+            try ensureToday(context: context)
+            scheduleAnalyticsRefresh(context: context)
+            statusMessage = "Successfully restored tracking data from Drive!"
+            toastMessage = "Restored \(backup.accounts.count) accounts and \(backup.videos.count) videos."
         }
     }
 
@@ -357,6 +377,9 @@ final class AppState: ObservableObject {
             }
             setSyncDate()
             lastAutomaticSyncAttempt = .now
+            if let startToken = try? await api.startPageToken() {
+                defaults.set(startToken, forKey: changesTokenKey(for: userID))
+            }
             try ensureToday(context: context)
             if announce {
                 statusMessage = "Folder check complete: \(videoCount) videos tracked; \(newVideoCount) new."
@@ -373,35 +396,70 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Performs a throttled foreground refresh. The timestamp is reserved before
-    /// starting work so multiple views becoming active cannot launch duplicate scans.
-    func refreshFromDriveIfNeeded(context: ModelContext) async {
-        guard hasStarted, auth.isSignedIn, !isWorking else { return }
-        if let lastAutomaticSyncAttempt,
-           Date.now.timeIntervalSince(lastAutomaticSyncAttempt) < automaticDriveRefreshInterval {
+    private func changesTokenKey(for userID: String) -> String {
+        "\(Keys.changesPageTokenPrefix)\(userID)"
+    }
+
+    /// Fast, lightweight incremental check against Google Drive Changes API (~100ms).
+    /// Immediately triggers folder sync as soon as files are added, modified, or removed in Drive.
+    func checkForDriveChanges(context: ModelContext) async {
+        guard auth.isSignedIn, let userID = auth.userID, !isWorking else { return }
+        let sources = (try? context.fetch(FetchDescriptor<DriveSource>()))?
+            .filter { $0.googleUserID == userID && $0.isEnabled } ?? []
+        guard !sources.isEmpty else { return }
+
+        let tokenKey = changesTokenKey(for: userID)
+        guard let token = defaults.string(forKey: tokenKey), !token.isEmpty else {
+            // First time: fetch start token and run baseline sync
+            if let startToken = try? await api.startPageToken() {
+                defaults.set(startToken, forKey: tokenKey)
+            }
+            await sync(context: context, announce: false)
             return
         }
+
+        do {
+            let (changes, nextToken) = try await api.listChanges(pageToken: token)
+            defaults.set(nextToken, forKey: tokenKey)
+            guard !changes.isEmpty else { return }
+
+            // Remote updates detected! Trigger immediate folder sync
+            await sync(context: context, announce: false)
+        } catch {
+            // If the token became invalid, reset token and sync cleanly
+            if let startToken = try? await api.startPageToken() {
+                defaults.set(startToken, forKey: tokenKey)
+            }
+        }
+    }
+
+    /// Background monitor that checks for Drive changes in the background
+    /// with ultra-lightweight tokens every 12 seconds while in foreground.
+    func startDriveChangeMonitor(context: ModelContext) {
+        changesMonitoringTask?.cancel()
+        changesMonitoringTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(12))
+                guard !Task.isCancelled, let self else { return }
+                await self.checkForDriveChanges(context: context)
+            }
+        }
+    }
+
+    func stopDriveChangeMonitor() {
+        changesMonitoringTask?.cancel()
+        changesMonitoringTask = nil
+    }
+
+    /// Performs an on-demand foreground refresh when requested.
+    func refreshFromDriveIfNeeded(context: ModelContext) async {
+        guard hasStarted, auth.isSignedIn, !isWorking else { return }
         guard
             let sourceCount = try? context.fetchCount(FetchDescriptor<DriveSource>()),
             sourceCount > 0
         else { return }
         lastAutomaticSyncAttempt = .now
         await sync(context: context, announce: false)
-    }
-
-    /// Poll while the app is usable so newly uploaded Drive videos normally
-    /// appear within one minute. iOS suspends this loop when the app is closed;
-    /// the scene-activation refresh catches up immediately on return.
-    func runForegroundDriveRefreshLoop(context: ModelContext) async {
-        while !Task.isCancelled {
-            do {
-                try await Task.sleep(for: .seconds(automaticDriveRefreshInterval))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            await refreshFromDriveIfNeeded(context: context)
-        }
     }
 
     func ensureToday(context: ModelContext) throws {
@@ -956,58 +1014,15 @@ final class AppState: ObservableObject {
     }
 
     func thumbnailImage(for video: VideoAsset) async -> UIImage? {
-        let identity = video.identityKey
-        let cacheKey = identity as NSString
-        if let cached = thumbnailCache.object(forKey: cacheKey) {
-            return cached
-        }
+        await ThumbnailService.shared.thumbnailImage(
+            for: video,
+            api: api,
+            currentUserID: auth.userID
+        )
+    }
 
-        // SwiftUI can create the same row more than once while scrolling. Share
-        // one request instead of starting duplicate Drive downloads and image
-        // decodes for the same file.
-        if let existingTask = thumbnailTasks[identity] {
-            return await existingTask.value
-        }
-
-        let task = Task<UIImage?, Never> { [weak self] in
-            guard let self,
-                  self.auth.userID == video.googleUserID,
-                  !video.isMissingFromDrive,
-                  video.thumbnailLink != nil,
-                  let data = try? await self.api.thumbnailData(for: video)
-            else { return nil }
-
-            // UIImage decoding is CPU work. Keep it off the main actor so a
-            // scrolling Library never freezes while a thumbnail arrives.
-            let image = await Task.detached(priority: .utility) { () -> UIImage? in
-                // Force a bounded decode. UIImage(data:) can defer decoding
-                // until SwiftUI composites the image, moving the expensive
-                // work back onto the render thread during a fling.
-                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                      let cgImage = CGImageSourceCreateThumbnailAtIndex(
-                        source,
-                        0,
-                        [
-                            kCGImageSourceCreateThumbnailFromImageAlways: true,
-                            kCGImageSourceCreateThumbnailWithTransform: true,
-                            kCGImageSourceThumbnailMaxPixelSize: 640
-                        ] as CFDictionary
-                      ) else {
-                    return nil
-                }
-                return UIImage(cgImage: cgImage)
-            }.value
-            guard let image else { return nil }
-            let imageCost = image.cgImage.map {
-                $0.bytesPerRow * $0.height
-            } ?? data.count
-            self.thumbnailCache.setObject(image, forKey: cacheKey, cost: imageCost)
-            return image
-        }
-        thumbnailTasks[identity] = task
-        let image = await task.value
-        thumbnailTasks[identity] = nil
-        return image
+    func cachedThumbnail(for video: VideoAsset) -> UIImage? {
+        ThumbnailService.shared.cachedImage(for: video.identityKey)
     }
 
     func backupNow(context: ModelContext) async {
@@ -1118,6 +1133,8 @@ final class AppState: ObservableObject {
             // Keep the hidden recovery metadata in sync with the visible video
             // backup, so a complete manual backup contains both layers.
             await backupNow(context: context)
+            // Immediately sync with Drive so all uploaded files and folder structures are registered
+            await sync(context: context, announce: false)
             statusMessage = "Backed up \(backedUpCount) video\(backedUpCount == 1 ? "" : "s") to Backup Videos."
         } catch is CancellationError {
             statusMessage = "Video backup canceled."
@@ -1180,7 +1197,8 @@ final class AppState: ObservableObject {
     /// remains visible until the new one is ready, so opening Analytics never
     /// blocks a tab-selection animation.
     func scheduleAnalyticsRefresh(context: ModelContext) {
-        guard let googleUserID = auth.userID else { return }
+        let googleUserID = auth.userID ?? analyticsSnapshot.googleUserID
+        guard !googleUserID.isEmpty else { return }
         let container = context.container
         analyticsTask?.cancel()
         analyticsTask = Task { [weak self] in
@@ -1191,7 +1209,9 @@ final class AppState: ObservableObject {
                     container: container,
                     googleUserID: googleUserID
                 )
-                guard !Task.isCancelled, self.auth.userID == googleUserID else { return }
+                guard !Task.isCancelled,
+                      self.auth.userID == nil || self.auth.userID == googleUserID
+                else { return }
                 self.analyticsSnapshot = snapshot
                 if let data = try? JSONEncoder().encode(snapshot) {
                     self.defaults.set(data, forKey: Keys.analyticsSnapshot)
@@ -1265,7 +1285,6 @@ final class AppState: ObservableObject {
     }
 
     private func purgeLegacyDemoData(context: ModelContext) {
-        #if !DEBUG
         do {
             let demoAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
                 .filter { $0.googleUserID == "demo-user" }
@@ -1280,13 +1299,9 @@ final class AppState: ObservableObject {
                 context.delete(video)
             }
             try context.save()
-            rootLink = ""
-            rootFolderID = ""
-            rootResourceKey = nil
         } catch {
             errorMessage = error.localizedDescription
         }
-        #endif
     }
 
     private func refreshAutomaticAccountIcons(context: ModelContext) {
@@ -1500,14 +1515,7 @@ final class AppState: ObservableObject {
 
     private func scheduleStartupMaintenance(context: ModelContext) {
         startupMaintenanceTask?.cancel()
-        // Let the first frame and navigation become interactive before the
-        // initial Drive/Photos maintenance work begins.
-        lastAutomaticSyncAttempt = nil
-        startupMaintenanceTask = Task(priority: .utility) { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled, let self else { return }
-            await self.refreshFromDriveIfNeeded(context: context)
-        }
+        // No automatic Drive sync on startup to keep launch instant and lag-free.
     }
 
     private func verifyOriginalFile(video: VideoAsset, localURL: URL) async throws {
@@ -1709,6 +1717,7 @@ final class AppState: ObservableObject {
         static let legacyCopyQueueOwner = "globalCopyQueueLegacyOwner"
         static let copyQueueConnectionPrefix = "globalCopyQueueConnection."
         static let copyQueueConnectionUserIDs = "globalCopyQueueConnectionUserIDs"
+        static let changesPageTokenPrefix = "driveChangesPageToken."
     }
 
     private struct CopyQueueConnection: Codable {

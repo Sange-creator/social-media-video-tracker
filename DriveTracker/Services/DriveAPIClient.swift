@@ -66,6 +66,22 @@ struct DriveListResponse: Decodable, Sendable {
     let files: [DriveItem]
 }
 
+struct DriveChange: Decodable, Sendable {
+    let fileId: String?
+    let removed: Bool?
+    let file: DriveItem?
+}
+
+struct DriveChangesResponse: Decodable, Sendable {
+    let nextPageToken: String?
+    let newStartPageToken: String?
+    let changes: [DriveChange]
+}
+
+struct DriveStartPageTokenResponse: Decodable, Sendable {
+    let startPageToken: String
+}
+
 enum DriveAPIError: LocalizedError {
     case invalidResponse
     case http(Int, String)
@@ -409,6 +425,49 @@ final class DriveAPIClient {
               (200 ... 299).contains(uploadHTTPResponse.statusCode) else {
             throw DriveAPIError.invalidResponse
         }
+    }
+
+    func startPageToken() async throws -> String {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/changes/startPageToken")
+        components?.queryItems = [
+            URLQueryItem(name: "supportsAllDrives", value: "true")
+        ]
+        guard let url = components?.url else { throw DriveAPIError.malformedURL }
+        let request = try await authorizedRequest(url: url)
+        let data = try await data(for: request)
+        return try decoder.decode(DriveStartPageTokenResponse.self, from: data).startPageToken
+    }
+
+    func listChanges(pageToken: String) async throws -> (changes: [DriveChange], nextToken: String) {
+        var allChanges: [DriveChange] = []
+        var currentToken = pageToken
+        var finalToken = pageToken
+
+        repeat {
+            var components = URLComponents(string: "https://www.googleapis.com/drive/v3/changes")
+            components?.queryItems = [
+                URLQueryItem(name: "pageToken", value: currentToken),
+                URLQueryItem(name: "pageSize", value: "1000"),
+                URLQueryItem(name: "includeItemsFromAllDrives", value: "true"),
+                URLQueryItem(name: "supportsAllDrives", value: "true"),
+                URLQueryItem(name: "fields", value: "nextPageToken,newStartPageToken,changes(fileId,removed,file(\(Self.fields)))")
+            ]
+            guard let url = components?.url else { throw DriveAPIError.malformedURL }
+            let request = try await authorizedRequest(url: url)
+            let data = try await data(for: request)
+            let response = try decoder.decode(DriveChangesResponse.self, from: data)
+            allChanges.append(contentsOf: response.changes)
+            if let next = response.nextPageToken {
+                currentToken = next
+            } else {
+                if let newStart = response.newStartPageToken {
+                    finalToken = newStart
+                }
+                break
+            }
+        } while true
+
+        return (allChanges, finalToken)
     }
 
     private func authorizedRequest(url: URL, resourceKeys: String? = nil) async throws -> URLRequest {

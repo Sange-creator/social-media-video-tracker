@@ -54,9 +54,6 @@ struct LibraryView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 96)
-                .transaction { transaction in
-                    transaction.animation = nil
-                }
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
@@ -143,16 +140,19 @@ private struct AccountLibraryView: View {
     @State private var isGridView = true
 
     private var filteredVideos: [VideoAsset] {
-        account.videos
-            .filter { video in
-                let matchesSearch = search.isEmpty ||
-                    video.name.localizedCaseInsensitiveContains(search) ||
-                    video.folderPath.localizedCaseInsensitiveContains(search)
-                let matchesStatus = selectedStatus == nil || video.status == selectedStatus
-                let matchesMissing = !missingOnly || video.isMissingFromDrive
-                return matchesSearch && matchesStatus && matchesMissing
+        let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isSearching = !trimmed.isEmpty
+        return account.videos.filter { video in
+            if isSearching {
+                let matches = video.name.localizedCaseInsensitiveContains(trimmed) ||
+                    video.folderPath.localizedCaseInsensitiveContains(trimmed)
+                guard matches else { return false }
             }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            if let selectedStatus, video.status != selectedStatus { return false }
+            if missingOnly, !video.isMissingFromDrive { return false }
+            return true
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     private let columns = [
@@ -211,9 +211,6 @@ private struct AccountLibraryView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 28)
-            .transaction { transaction in
-                transaction.animation = nil
-            }
         }
         .trackerScreen()
         .navigationTitle(account.displayName)
@@ -221,6 +218,24 @@ private struct AccountLibraryView: View {
         .searchable(text: $search, prompt: "Search videos or subfolders")
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await state.sync(context: context, announce: false) }
+                } label: {
+                    if state.isWorking {
+                        ProgressView()
+                            .tint(TrackerPalette.accent)
+                            .scaleEffect(0.7)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(TrackerPalette.accent)
+                    }
+                }
+                .disabled(state.isWorking)
+            }
+        }
         .sheet(item: $previewVideo) { video in
             VideoPreviewView(video: video)
         }
@@ -342,10 +357,11 @@ private struct LibraryVideoPosterCard: View {
             ZStack(alignment: .topTrailing) {
                 VideoThumbnailView(
                     video: video,
-                    width: (UIScreen.main.bounds.width - 44) / 2,
-                    height: ((UIScreen.main.bounds.width - 44) / 2) * 1.38,
+                    width: nil,
+                    height: 220,
                     cornerRadius: 14
                 )
+                .frame(maxWidth: .infinity)
 
                 // Top duration badge & indicators
                 HStack(spacing: 4) {

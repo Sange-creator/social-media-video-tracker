@@ -63,7 +63,7 @@ struct DriveTrackerApp: App {
             Task {
                 switch newPhase {
                 case .active:
-                    await state.refreshFromDriveIfNeeded(context: container.mainContext)
+                    await state.checkForDriveChanges(context: container.mainContext)
                 case .background:
                     await state.backupNow(context: container.mainContext)
                 default:

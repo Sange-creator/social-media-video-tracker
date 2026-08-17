@@ -235,6 +235,27 @@ final class BackupService {
         return backup
     }
 
+    func restoreFromDriveBackup(
+        context: ModelContext,
+        expectedGoogleUserID: String
+    ) async throws -> TrackerBackup? {
+        guard let file = try await api.listAppDataFile(named: Self.fileName) else {
+            return nil
+        }
+        let data = try await api.downloadAppData(id: file.id)
+        let backup = try decoder.decode(TrackerBackup.self, from: data)
+        guard backup.schemaVersion <= TrackerBackup.currentSchemaVersion else {
+            throw BackupError.unsupportedSchema
+        }
+        guard backup.googleUserID == expectedGoogleUserID else {
+            throw BackupError.wrongGoogleAccount
+        }
+        try restore(backup, context: context)
+        defaults.set(backup.revision, forKey: "backupRevision")
+        defaults.set(Date.now, forKey: "lastBackupAt")
+        return backup
+    }
+
     func deleteRemoteBackup() async throws {
         guard let file = try await api.listAppDataFile(named: Self.fileName) else { return }
         try await api.deleteFile(id: file.id)

@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var confirmDeleteLocal = false
     @State private var confirmDeleteBackup = false
     @State private var confirmVideoBackup = false
+    @State private var confirmRestore = false
     @State private var confirmDisconnect = false
     @State private var showFolderBrowser = false
     @State private var pendingFolder: DriveFolderChoice?
@@ -71,6 +72,14 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This uploads every downloaded video still available in Photos to Backup Videos, organized by account and subfolder, in the currently connected Google account.")
+        }
+        .confirmationDialog("Restore tracking data from Google Drive?", isPresented: $confirmRestore) {
+            Button("Restore Data Now") {
+                Task { await state.restoreBackupNow(context: context) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This loads all tracked accounts, assignments, and history from your hidden Google Drive backup into this iPhone.")
         }
         .confirmationDialog("Disconnect Google?", isPresented: $confirmDisconnect) {
             Button("Disconnect and revoke access", role: .destructive) {
@@ -215,12 +224,11 @@ struct SettingsView: View {
                     .background(TrackerPalette.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(TrackerPressButtonStyle())
-                .disabled(!auth.isConfigured)
             }
 
             if !auth.isConfigured {
                 Label(
-                    "OAuth client ID is not configured in Info.plist.",
+                    "Tap Sign In to see the OAuth configuration error. Add the real iOS client ID locally to enable Google sign-in.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.footnote)
@@ -509,7 +517,7 @@ struct SettingsView: View {
                 trailing: state.lastBackupAt != nil ? "Protected" : "Pending"
             )
 
-            HStack {
+            HStack(spacing: 10) {
                 Button {
                     confirmVideoBackup = true
                 } label: {
@@ -531,6 +539,25 @@ struct SettingsView: View {
                 .buttonStyle(TrackerPressButtonStyle())
                 .disabled(!auth.isSignedIn || state.isBackingUpVideos || sources.isEmpty)
 
+                Button {
+                    confirmRestore = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.counterclockwise.icloud.fill")
+                        Text("Restore Data")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TrackerPalette.textPrimary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(TrackerPalette.raised, in: Capsule())
+                    .overlay {
+                        Capsule().stroke(TrackerPalette.line, lineWidth: 1)
+                    }
+                }
+                .buttonStyle(TrackerPressButtonStyle())
+                .disabled(!auth.isSignedIn || state.isWorking)
+
                 Spacer()
 
                 if let lastBackupAt = state.lastBackupAt {
@@ -540,7 +567,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Uploads downloaded videos to Backup Videos in the currently connected Google Drive, preserving each account and synced subfolder.")
+            Text("Back up your tracked accounts and download history to your Google Drive AppData vault, or restore your previous state anytime.")
                 .font(.caption2)
                 .foregroundStyle(TrackerPalette.muted)
         }

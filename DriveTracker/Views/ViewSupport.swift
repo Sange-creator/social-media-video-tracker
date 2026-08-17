@@ -2,18 +2,18 @@ import SwiftUI
 import UIKit
 
 enum TrackerPalette {
-    static let canvas = Color(hex: "#090A0F")
-    static let surface = Color(hex: "#131622")
-    static let raised = Color(hex: "#1A1E2C")
-    static let elevated = Color(hex: "#222739")
+    static let canvas = Color(red: 9/255, green: 10/255, blue: 15/255)
+    static let surface = Color(red: 19/255, green: 22/255, blue: 34/255)
+    static let raised = Color(red: 26/255, green: 30/255, blue: 44/255)
+    static let elevated = Color(red: 34/255, green: 39/255, blue: 57/255)
     static let line = Color(white: 1.0).opacity(0.08)
     static let cardBorder = Color(white: 1.0).opacity(0.10)
-    static let muted = Color(hex: "#94A3B8")
-    static let textPrimary = Color(hex: "#F8FAFC")
-    static let accent = Color(hex: "#38BDF8")
-    static let success = Color(hex: "#34D399")
-    static let warning = Color(hex: "#FBBF24")
-    static let danger = Color(hex: "#F87171")
+    static let muted = Color(red: 148/255, green: 163/255, blue: 184/255)
+    static let textPrimary = Color(red: 248/255, green: 250/255, blue: 252/255)
+    static let accent = Color(red: 56/255, green: 189/255, blue: 248/255)
+    static let success = Color(red: 52/255, green: 211/255, blue: 153/255)
+    static let warning = Color(red: 251/255, green: 191/255, blue: 36/255)
+    static let danger = Color(red: 248/255, green: 113/255, blue: 113/255)
 }
 
 struct RadialQuotaProgress: View {
@@ -44,7 +44,6 @@ struct RadialQuotaProgress: View {
                     style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .animation(.linear(duration: 0.12), value: progress)
 
             if showLabel {
                 VStack(spacing: 0) {
@@ -65,21 +64,21 @@ struct StatusPill: View {
     let status: VideoStatus
 
     var body: some View {
+        let tint = status.tint
         HStack(spacing: 4) {
             Circle()
-                .fill(status.tint)
+                .fill(tint)
                 .frame(width: 5, height: 5)
             Text(status.title.capitalized)
                 .font(.system(size: 9.5, weight: .bold))
                 .lineLimit(1)
-                .fixedSize()
         }
-        .foregroundStyle(status.tint)
+        .foregroundStyle(tint)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
-        .background(status.tint.opacity(0.14), in: Capsule())
+        .background(tint.opacity(0.14), in: Capsule())
         .overlay {
-            Capsule().stroke(status.tint.opacity(0.25), lineWidth: 0.5)
+            Capsule().stroke(tint.opacity(0.25), lineWidth: 0.5)
         }
     }
 }
@@ -102,7 +101,6 @@ struct FilterChip: View {
         .overlay {
             Capsule().stroke(selected ? Color.clear : TrackerPalette.line, lineWidth: 0.5)
         }
-        .shadow(color: selected ? TrackerPalette.accent.opacity(0.3) : .clear, radius: 8, y: 2)
     }
 }
 
@@ -168,7 +166,6 @@ struct TrackerActionButtonStyle: ButtonStyle {
                     .stroke(border, lineWidth: 0.5)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .shadow(color: kind == .primary ? TrackerPalette.accent.opacity(0.25) : .clear, radius: 8, y: 3)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .sensoryFeedback(
@@ -207,20 +204,13 @@ struct TrackerActionButtonStyle: ButtonStyle {
     }
 }
 
-/// Gives card rows and icon-only controls the same unmistakable press response
-/// as native iOS controls without adding a permanent button background.
+/// Gives card rows and icon-only controls an instant responsive press state
+/// without allocating animations or haptic loops during scroll gestures.
 struct TrackerPressButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .contentShape(Rectangle())
-            .opacity(configuration.isPressed ? 0.55 : 1)
-            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
-            .sensoryFeedback(
-                .impact(flexibility: .soft, intensity: 0.45),
-                trigger: configuration.isPressed
-            ) { oldValue, newValue in
-                !oldValue && newValue
-            }
+            .opacity(configuration.isPressed ? 0.65 : 1.0)
     }
 }
 
@@ -235,9 +225,6 @@ extension View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(TrackerPalette.line, lineWidth: 0.5)
             }
-            // Avoid blurred shadows here. This modifier is used by most cards
-            // in every tab, and shadows force off-screen rendering while the
-            // user is dragging a scroll view.
     }
 
     func trackerScreen() -> some View {
@@ -268,14 +255,15 @@ struct AccountIdentityIcon: View {
     var badge: String?
 
     var body: some View {
+        let color = Color(hex: colorHex)
         Image(systemName: symbol)
             .font(.system(size: size * 0.34, weight: .bold))
-            .foregroundStyle(Color(hex: colorHex))
+            .foregroundStyle(color)
             .frame(width: size, height: size)
-            .background(Color(hex: colorHex).opacity(0.14))
+            .background(color.opacity(0.14))
             .clipShape(Circle())
             .overlay {
-                Circle().stroke(Color(hex: colorHex).opacity(0.28), lineWidth: 0.5)
+                Circle().stroke(color.opacity(0.28), lineWidth: 0.5)
             }
             .overlay(alignment: .bottomTrailing) {
                 if let badge {
@@ -298,11 +286,24 @@ struct AccountIdentityIcon: View {
 struct VideoThumbnailView: View {
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
-    var width: CGFloat = 108
-    var height: CGFloat = 144
+    var width: CGFloat? = 108
+    var height: CGFloat? = 144
     var cornerRadius: CGFloat = 12
 
     @State private var image: UIImage?
+
+    init(
+        video: VideoAsset,
+        width: CGFloat? = 108,
+        height: CGFloat? = 144,
+        cornerRadius: CGFloat = 12
+    ) {
+        self.video = video
+        self.width = width
+        self.height = height
+        self.cornerRadius = cornerRadius
+        _image = State(initialValue: ThumbnailService.shared.cachedImage(for: video.identityKey))
+    }
 
     var body: some View {
         ZStack {
@@ -319,19 +320,19 @@ struct VideoThumbnailView: View {
                     .foregroundStyle(TrackerPalette.muted)
             }
 
-            // A flat scrim keeps scrolling on the fast compositing path.
+            // Flat scrim keeps scrolling on the fast compositing path.
             Color.black.opacity(image == nil ? 0 : 0.18)
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .task(id: video.thumbnailLink) {
-            // Do not start network/decode work for cells that are only visible
-            // for a frame during a fast fling. SwiftUI cancels this task when
-            // the cell leaves the lazy container, so the delay acts as a
-            // lightweight scroll-aware prefetch gate.
-            try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled else { return }
-            image = await state.thumbnailImage(for: video)
+        .task(id: video.identityKey) {
+            if image == nil {
+                image = await ThumbnailService.shared.thumbnailImage(
+                    for: video,
+                    api: state.api,
+                    currentUserID: state.auth.userID
+                )
+            }
         }
     }
 }

@@ -464,4 +464,8 @@ enum DayKey {
             components.day ?? 0
         )
     }
+
+    static func isToday(_ date: Date) -> Bool {
+        Calendar.autoupdatingCurrent.isDateInToday(date)
+    }
 }

@@ -47,9 +47,6 @@ struct AccountsView: View {
                 .padding(16)
                 .padding(.top, 8)
                 .padding(.bottom, 96)
-                .transaction { transaction in
-                    transaction.animation = nil
-                }
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
@@ -120,7 +117,7 @@ private struct AccountRow: View {
     private var completedToday: Int {
         account.videos.filter { video in
             guard let uploadedAt = video.uploadedAt else { return false }
-            return DayKey.value(for: uploadedAt) == DayKey.value(for: .now)
+            return DayKey.isToday(uploadedAt)
         }.count
     }
 
@@ -179,15 +176,10 @@ private struct AccountRow: View {
                         .foregroundStyle(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
                 }
 
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(TrackerPalette.raised)
-                        Capsule()
-                            .fill(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
-                            .frame(width: geo.size.width * min(max(quotaProgress, 0), 1))
-                    }
-                }
-                .frame(height: 5)
+                ProgressView(value: min(max(quotaProgress, 0), 1))
+                    .tint(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
+                    .background(TrackerPalette.raised, in: Capsule())
+                    .frame(height: 5)
             }
 
             Divider().overlay(TrackerPalette.line)

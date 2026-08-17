@@ -11,16 +11,14 @@ struct RootView: View {
     var body: some View {
         rootContent
             .task {
-                #if DEBUG
-                if accounts.isEmpty {
-                    seedDemoData(context: context)
-                }
-                #endif
                 await state.start(context: context)
             }
             .task(id: auth.isSignedIn) {
-                guard auth.isSignedIn else { return }
-                await state.runForegroundDriveRefreshLoop(context: context)
+                guard auth.isSignedIn else {
+                    state.stopDriveChangeMonitor()
+                    return
+                }
+                state.startDriveChangeMonitor(context: context)
             }
             .task(id: hasConfiguredAccount) {
                 guard hasConfiguredAccount else {
@@ -34,29 +32,23 @@ struct RootView: View {
                 dashboardIsReady = true
             }
             .overlay(alignment: .bottom) {
-                if let error = state.errorMessage {
-                    ImportantMessageBanner(message: error)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
-                } else if let message = state.toastMessage {
-                    ToastMessageBanner(message: message)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
-                } else if let message = state.statusMessage {
-                    ToastMessageBanner(message: message)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false)
+                Group {
+                    if let error = state.errorMessage {
+                        ImportantMessageBanner(message: error)
+                    } else if let message = state.toastMessage {
+                        ToastMessageBanner(message: message)
+                    } else if let message = state.statusMessage {
+                        ToastMessageBanner(message: message)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, hasConfiguredAccount ? 72 : 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.errorMessage)
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.toastMessage)
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.statusMessage)
+                .allowsHitTesting(false)
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.errorMessage)
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.toastMessage)
-            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.statusMessage)
             .task(id: state.errorMessage) {
                 guard let message = state.errorMessage else { return }
                 try? await Task.sleep(for: .seconds(6))
@@ -97,75 +89,6 @@ struct RootView: View {
     private var hasConfiguredAccount: Bool {
         accounts.contains { $0.isConfigured }
     }
-
-    #if DEBUG
-    private func seedDemoData(context: ModelContext) {
-        let userID = state.auth.userID ?? "demo-user"
-
-        let fitLife = TikTokAccount(
-            googleUserID: userID,
-            driveFolderID: "fitlife-folder-id",
-            folderName: "FitLife Reels",
-            displayName: "@FitLifeDaily",
-            dailyQuota: 3,
-            iconSymbol: "dumbbell.fill",
-            iconColorHex: "#38BDF8"
-        )
-        context.insert(fitLife)
-
-        let techTrends = TikTokAccount(
-            googleUserID: userID,
-            driveFolderID: "tech-folder-id",
-            folderName: "Tech Trends",
-            displayName: "@TechFlowTrends",
-            dailyQuota: 2,
-            iconSymbol: "sparkles",
-            iconColorHex: "#34D399"
-        )
-        context.insert(techTrends)
-
-        let titles = [
-            "Morning_HIIT_Routine_Ep1.mp4",
-            "Protein_Meal_Prep_Guide.mp4",
-            "Mobility_Flow_10Min.mp4",
-            "Bench_Press_Form_Tip.mp4",
-            "AI_Video_Tools_2026.mp4",
-            "MacBook_Setup_Aesthetics.mp4"
-        ]
-
-        for (index, title) in titles.enumerated() {
-            let targetAccount = index < 4 ? fitLife : techTrends
-            let video = VideoAsset(
-                driveFileID: "demo-video-\(index)",
-                accountFolderID: targetAccount.driveFolderID,
-                googleUserID: targetAccount.googleUserID,
-                name: title,
-                folderPath: "\(targetAccount.folderName)/Q3 Drops",
-                mimeType: "video/mp4",
-                size: 48_000_000,
-                thumbnailLink: nil,
-                canDownload: true,
-                account: targetAccount
-            )
-            context.insert(video)
-
-            if index == 0 {
-                video.downloadedAt = Date()
-                video.uploadedAt = Date()
-            } else if index < 3 {
-                let assignment = DailyAssignment(
-                    localDayKey: DayKey.value(for: .now),
-                    slot: index,
-                    account: targetAccount,
-                    video: video
-                )
-                context.insert(assignment)
-            }
-        }
-
-        try? context.save()
-    }
-    #endif
 }
 
 private struct ToastMessageBanner: View {
@@ -239,9 +162,10 @@ private struct LaunchView: View {
                         )
                         .shadow(color: TrackerPalette.accent.opacity(0.35), radius: 16, y: 6)
 
-                    Image(systemName: "arrow.down.to.line.compact")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundStyle(Color(hex: "#090A0F"))
+                    Image("BrandMark")
+                        .resizable()
+                        .scaledToFill()
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
                 .frame(width: 72, height: 72)
 
@@ -279,23 +203,23 @@ struct MainTabView: View {
                 LinearGradient(
                     colors: [
                         TrackerPalette.canvas.opacity(0),
-                        TrackerPalette.canvas.opacity(0.85),
-                        TrackerPalette.canvas,
                         TrackerPalette.canvas
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 70)
+                .frame(height: 36)
 
                 Rectangle()
                     .fill(TrackerPalette.canvas)
-                    .frame(height: 70)
+                    .frame(height: 54)
             }
             .frame(maxWidth: .infinity)
             .allowsHitTesting(false)
+            .compositingGroup()
 
             floatingDock
+                .compositingGroup()
         }
         .ignoresSafeArea(.all, edges: .bottom)
     }
