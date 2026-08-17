@@ -1,35 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="background" x1="80" y1="80" x2="944" y2="944" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#071B5C"/>
-      <stop offset="0.58" stop-color="#062A91"/>
-      <stop offset="1" stop-color="#020B3E"/>
+    <linearGradient id="vaultV" x1="228" y1="170" x2="796" y2="870" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B2E78"/>
+      <stop offset="1" stop-color="#1769F5"/>
     </linearGradient>
-    <linearGradient id="frame" x1="360" y1="180" x2="850" y2="866" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#25E1EA"/>
-      <stop offset="0.55" stop-color="#1598F2"/>
-      <stop offset="1" stop-color="#2563EB"/>
-    </linearGradient>
-    <linearGradient id="check" x1="332" y1="360" x2="820" y2="780" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2DE9EC"/>
-      <stop offset="0.52" stop-color="#17B9F2"/>
-      <stop offset="1" stop-color="#25E879"/>
-    </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="18" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
   </defs>
-  <rect width="1024" height="1024" rx="226" fill="url(#background)"/>
-  <path d="M74 190C270 50 492 38 738 98c136 33 207 93 240 151v-249H74v190Z" fill="#0B3AA0" opacity=".25"/>
-  <g filter="url(#glow)"><rect x="334" y="144" width="356" height="736" rx="94" fill="none" stroke="url(#frame)" stroke-width="74"/></g>
-  <g fill="#03134D">
-    <rect x="556" y="212" width="56" height="56" rx="16"/><rect x="556" y="326" width="56" height="56" rx="16"/><rect x="556" y="440" width="56" height="56" rx="16"/>
-    <rect x="356" y="704" width="56" height="56" rx="16"/><rect x="356" y="818" width="56" height="56" rx="16"/>
-  </g>
-  <path d="M408 450 524 566 694 366" fill="none" stroke="#03134D" stroke-width="148" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
-  <path d="M408 450 524 566 694 366" fill="none" stroke="url(#check)" stroke-width="108" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M386 414 570 558 452 650 330 546c-50-43-52-119-4-164 17-16 38-25 60-25Z" fill="#16CFE5" opacity=".96"/>
-  <path d="M422 450 548 548 458 612 370 538c-25-21-26-59-2-82 14-13 34-17 54-6Z" fill="#071B5C"/>
-  <path d="m434 472 94 73-65 45-64-54c-14-12-15-32-2-45 10-10 24-14 37-19Z" fill="#FFFFFF"/>
+  <path d="M218 166c-38-34-96-4-92 47l59 627c4 45 54 68 91 41l243-177 238 177c37 27 87 4 91-41l59-627c4-51-54-81-92-47L512 406 218 166Z" fill="url(#vaultV)"/>
+  <path d="m230 232 282 221 282-221-48 522-234-174-234 174-48-522Z" fill="#08215C" opacity=".72"/>
+  <path d="M430 468c0-25 28-40 50-27l170 98c22 13 22 45 0 58l-170 98c-22 13-50-2-50-28V468Z" fill="#FFFFFF"/>
+  <path d="m474 510 101 58-101 58V510Z" fill="#1769F5"/>
 </svg>
