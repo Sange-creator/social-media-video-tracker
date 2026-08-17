@@ -231,7 +231,7 @@ new consent screen after the upload permission is added.
 3. Use bundle identifier:
 
    ```text
-   com.example.DriveTracker
+   com.socialmediavideotracker.app
    ```
 
 4. Copy the client ID and its reversed URL scheme. For a real device build,

@@ -51,7 +51,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private var session: URLSession {
         if let sessionStorage { return sessionStorage }
         let configuration = URLSessionConfiguration.background(
-            withIdentifier: "com.example.DriveTracker.video-downloads"
+            withIdentifier: "com.socialmediavideotracker.app.video-downloads"
         )
         configuration.sessionSendsLaunchEvents = true
         configuration.isDiscretionary = false
