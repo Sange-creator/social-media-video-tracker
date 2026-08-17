@@ -28,6 +28,7 @@ struct TodayView: View {
     }
 
     var body: some View {
+        let visibleAccounts = activeAccounts
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
@@ -39,12 +40,12 @@ struct TodayView: View {
                     HStack {
                         TrackerSectionLabel(
                             title: "Tracked Accounts",
-                            trailing: "\(activeAccounts.count) active"
+                            trailing: "\(visibleAccounts.count) active"
                         )
                     }
                     .padding(.top, 6)
 
-                    ForEach(activeAccounts) { account in
+                    ForEach(visibleAccounts) { account in
                         NavigationLink {
                             TodayAccountDetailView(account: account)
                         } label: {
@@ -53,7 +54,7 @@ struct TodayView: View {
                         .buttonStyle(TrackerPressButtonStyle())
                     }
 
-                    if activeAccounts.isEmpty {
+                    if visibleAccounts.isEmpty {
                         ContentUnavailableView(
                             "No active accounts",
                             systemImage: "pause.rectangle",
@@ -66,6 +67,9 @@ struct TodayView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 120)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
@@ -386,7 +390,6 @@ private struct TodayVideoPosterCard: View {
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .shadow(color: .black.opacity(0.9), radius: 3)
 
                 if video.status == .assigned || video.status == .available {
                     Button {
@@ -607,7 +610,6 @@ private struct AccountTodaySection: View {
                 .stroke(TrackerPalette.line, lineWidth: 0.5)
         }
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: Color.black.opacity(0.28), radius: 14, y: 5)
         .sheet(isPresented: $showManualPicker) {
             ManualVideoPickerView(account: account)
         }

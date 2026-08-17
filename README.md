@@ -133,6 +133,35 @@ iOS limits the number of pending local notifications, so the app schedules the n
 - A corrupt or unavailable backup never overwrites valid local data.
 - Google tokens are handled by Google Sign-In and stored securely in the iOS Keychain.
 
+### Visible video backup
+
+The **Back Up Videos** action in Settings asks for confirmation before uploading
+downloaded videos that are still available in Photos. It creates this hierarchy
+in the currently authenticated Google Drive account:
+
+```text
+Backup Videos/
+└── Account folder/
+    └── Synced subfolders/
+        └── video.mp4
+```
+
+Repeated backups update a same-named file instead of creating another copy. A
+video must have been downloaded into Photos first; metadata for videos that were
+only discovered during sync is not enough to reconstruct the original media.
+The existing hidden JSON backup remains separate and contains tracker metadata,
+not video files.
+
+### Privacy and repository safety
+
+- No Google OAuth client ID, access token, refresh token, Apple team ID, Photos
+  record, Drive record, email address, or downloaded media is stored in this
+  repository.
+- `DriveTracker/Info.plist` contains placeholders. Configure the local OAuth
+  values before running the app, and do not commit them.
+- Local build output, signing files, local databases, secrets, and personal data
+  directories are excluded by [`.gitignore`](.gitignore).
+
 ### Performance and responsiveness
 
 - Analytics uses a persisted summary snapshot instead of querying the complete
@@ -188,8 +217,12 @@ The app requests:
 
 - `https://www.googleapis.com/auth/drive.readonly` to inspect and download user-selected folders.
 - `https://www.googleapis.com/auth/drive.appdata` to store the optional hidden metadata backup.
+- `https://www.googleapis.com/auth/drive.file` to create and update only the
+  app-created `Backup Videos` folders and files.
 
-The broader read-only scope is required because a pasted or shared Drive link is not automatically authorized by the narrower `drive.file` scope.
+The read-only scope is required because a pasted or shared Drive link is not
+automatically authorized by the narrower `drive.file` scope. Google may show a
+new consent screen after the upload permission is added.
 
 ### 3. Create the iOS OAuth client
 
@@ -198,10 +231,11 @@ The broader read-only scope is required because a pasted or shared Drive link is
 3. Use bundle identifier:
 
    ```text
-   com.saangetamang.DriveTracker
+   com.example.DriveTracker
    ```
 
-4. Copy the client ID and its reversed URL scheme.
+4. Copy the client ID and its reversed URL scheme. For a real device build,
+   replace the example bundle identifier with one registered to your Apple team.
 5. Replace the two placeholders in [`DriveTracker/Info.plist`](DriveTracker/Info.plist):
 
    ```xml
@@ -240,7 +274,8 @@ A free Apple Personal Team can install the app on a personal iPhone, but the pro
 
 1. Tap **Connect Google**.
 2. Select the Gmail account that has access to the required Drive folder.
-3. Allow the requested read-only Drive access.
+3. Allow the requested Drive access. Read access is used for selected folders;
+   write access is limited to files and folders created by this app for video backup.
 4. Paste the specific folder link.
 5. Enter the content-account name and daily quota.
 6. Confirm the folder association.
@@ -305,7 +340,8 @@ DriveTracker/
 
 - Confirm that `GIDClientID` is an iOS OAuth client ID, not a web client ID.
 - Confirm the reversed client ID is present under `CFBundleURLSchemes`.
-- Confirm the OAuth client's bundle identifier exactly matches `com.saangetamang.DriveTracker`.
+- Confirm the OAuth client's bundle identifier exactly matches the bundle ID in
+  the Xcode project.
 
 ### A shared folder cannot be opened
 
@@ -335,7 +371,9 @@ DriveTracker/
 ## Privacy
 
 - Tracker data and analytics remain on the device.
-- The optional Drive backup contains tracker metadata and cached copy-queue text—never video files, Google tokens, or social-media credentials.
+- The hidden Drive backup contains tracker metadata and cached copy-queue text;
+  the separate, user-confirmed `Backup Videos` action uploads only downloaded
+  Photos copies. Neither flow stores Google tokens or social-media credentials.
 - Videos are transferred directly between Google Drive, the app, and Photos.
 - The app does not request App Tracking Transparency permission.
 - The app includes [`PrivacyInfo.xcprivacy`](DriveTracker/PrivacyInfo.xcprivacy).
@@ -352,6 +390,6 @@ DriveTracker/
 
 ## License
 
-Copyright © 2026 Saange Tamang.
+Copyright © 2026 Social Media Video Tracker contributors.
 
 Released under the [MIT License](LICENSE).

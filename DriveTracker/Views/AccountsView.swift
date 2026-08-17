@@ -47,6 +47,9 @@ struct AccountsView: View {
                 .padding(16)
                 .padding(.top, 8)
                 .padding(.bottom, 96)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)

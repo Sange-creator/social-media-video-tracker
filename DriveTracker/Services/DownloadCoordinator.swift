@@ -41,6 +41,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private var sessionStorage: URLSession?
     private var recoveryHandler: ((String, URL) -> Void)?
     private let recoveredDownloadsKey = "recoveredBackgroundDownloads"
+    private let minimumProgressUpdateInterval: TimeInterval = 0.25
 
     override init() {
         super.init()
@@ -50,7 +51,7 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private var session: URLSession {
         if let sessionStorage { return sessionStorage }
         let configuration = URLSessionConfiguration.background(
-            withIdentifier: "com.saangetamang.DriveTracker.video-downloads"
+            withIdentifier: "com.example.DriveTracker.video-downloads"
         )
         configuration.sessionSendsLaunchEvents = true
         configuration.isDiscretionary = false
@@ -135,7 +136,7 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
         let now = Date()
         Task { @MainActor in
             if let last = lastProgressUpdateByIdentity[identity],
-               now.timeIntervalSince(last) < 0.1,
+               now.timeIntervalSince(last) < minimumProgressUpdateInterval,
                totalBytesWritten < totalBytesExpectedToWrite {
                 return
             }

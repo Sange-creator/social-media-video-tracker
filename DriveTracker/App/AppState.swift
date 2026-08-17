@@ -19,6 +19,7 @@ final class AppState: ObservableObject {
     @Published var lastSyncAt: Date?
     @Published private(set) var analyticsSnapshot: AnalyticsSnapshot
     @Published private(set) var activeDownloadIdentities: Set<String> = []
+    @Published private(set) var isBackingUpVideos = false
     private var activeDownloadTasks: [String: Task<Void, Never>] = [:]
     @Published private(set) var reminderTimeZoneID: String
     @Published private(set) var globalCopyQueueLastSyncedAt: Date? {
@@ -1030,6 +1031,124 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Copies every downloaded video that still exists in Photos into the
+    /// visible Drive hierarchy `Backup Videos/<account>/<subfolders>`.
+    /// The DriveAPIClient uses the same authenticated Google account as sync.
+    func backupVideosNow(context: ModelContext) async {
+        guard auth.isSignedIn, let userID = auth.userID else {
+            errorMessage = GoogleAuthError.notSignedIn.localizedDescription
+            return
+        }
+        guard !isBackingUpVideos else { return }
+        isBackingUpVideos = true
+        defer { isBackingUpVideos = false }
+
+        do {
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+                .filter { $0.googleUserID == userID && $0.isConfigured && !$0.isMissingFromDrive }
+            let videos = try context.fetch(FetchDescriptor<VideoAsset>())
+                .filter {
+                    $0.googleUserID == userID &&
+                    $0.downloadedAt != nil &&
+                    !$0.isMissingFromPhotos &&
+                    $0.photoLocalIdentifier != nil
+                }
+            guard !videos.isEmpty else {
+                throw VideoBackupError.noVideos
+            }
+
+            let accountByID = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
+            let rootID = try await api.findOrCreateFolder(named: "Backup Videos")
+            var folderIDs: [String: String] = [:]
+            var backedUpCount = 0
+
+            for video in videos {
+                try Task.checkCancellation()
+                guard let account = video.account,
+                      accountByID[account.id] != nil,
+                      let photoIdentifier = video.photoLocalIdentifier else { continue }
+
+                let accountFolderName = sanitizedDriveFolderName(account.folderName)
+                let accountFolderKey = "\(rootID)/\(accountFolderName)"
+                let accountFolderID: String
+                if let cached = folderIDs[accountFolderKey] {
+                    accountFolderID = cached
+                } else {
+                    let created = try await api.findOrCreateFolder(
+                        named: accountFolderName,
+                        parentID: rootID
+                    )
+                    folderIDs[accountFolderKey] = created
+                    accountFolderID = created
+                }
+
+                let folderPath = backupSubfolderPath(video.folderPath, accountName: account.folderName)
+                let destinationID = try await ensureBackupFolderPath(
+                    folderPath,
+                    parentID: accountFolderID,
+                    cache: &folderIDs
+                )
+                let localURL = try await photoLibrary.exportVideo(localIdentifier: photoIdentifier)
+                defer { try? FileManager.default.removeItem(at: localURL) }
+                try await api.uploadFile(
+                    at: localURL,
+                    name: sanitizedDriveFileName(video.name),
+                    mimeType: video.mimeType.hasPrefix("video/") ? video.mimeType : "video/mp4",
+                    parentID: destinationID
+                )
+                backedUpCount += 1
+            }
+            guard backedUpCount > 0 else { throw VideoBackupError.noVideos }
+            // Keep the hidden recovery metadata in sync with the visible video
+            // backup, so a complete manual backup contains both layers.
+            await backupNow(context: context)
+            statusMessage = "Backed up \(backedUpCount) video\(backedUpCount == 1 ? "" : "s") to Backup Videos."
+        } catch is CancellationError {
+            statusMessage = "Video backup canceled."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func ensureBackupFolderPath(
+        _ path: [String],
+        parentID: String,
+        cache: inout [String: String]
+    ) async throws -> String {
+        var currentID = parentID
+        for component in path {
+            let key = "\(currentID)/\(component)"
+            if let cached = cache[key] {
+                currentID = cached
+            } else {
+                currentID = try await api.findOrCreateFolder(named: component, parentID: currentID)
+                cache[key] = currentID
+            }
+        }
+        return currentID
+    }
+
+    private func backupSubfolderPath(_ folderPath: String?, accountName: String) -> [String] {
+        let components = (folderPath ?? "")
+            .split(separator: "/")
+            .map { sanitizedDriveFolderName(String($0)) }
+            .filter { !$0.isEmpty }
+        let accountComponent = sanitizedDriveFolderName(accountName)
+        return components.first == accountComponent ? Array(components.dropFirst()) : components
+    }
+
+    private func sanitizedDriveFolderName(_ value: String) -> String {
+        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let invalid = CharacterSet(charactersIn: "/\\:")
+        let result = cleaned.components(separatedBy: invalid).joined(separator: "-")
+        return result.isEmpty ? "Untitled" : String(result.prefix(120))
+    }
+
+    private func sanitizedDriveFileName(_ value: String) -> String {
+        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sanitizedDriveFolderName(cleaned.isEmpty ? "video.mp4" : cleaned)
+    }
+
     func scheduleBackup(context: ModelContext) {
         backupService.markDirty()
         scheduleAnalyticsRefresh(context: context)
@@ -1604,6 +1723,17 @@ enum DriveAssociationError: LocalizedError {
 private enum DownloadKind {
     case initial
     case additionalCopy
+}
+
+private enum VideoBackupError: LocalizedError {
+    case noVideos
+
+    var errorDescription: String? {
+        switch self {
+        case .noVideos:
+            "There are no downloaded videos available in Photos to back up."
+        }
+    }
 }
 
 enum DownloadIntegrityError: LocalizedError {

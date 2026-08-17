@@ -2,6 +2,25 @@
 
 All notable changes to Social Media Video Tracker are documented here.
 
+## Unreleased — 2026-08-17
+
+### Backup and repository safety
+
+- Added a confirmed visible video-backup flow that recreates
+  `Backup Videos/<account>/<subfolder>` in the active Google Drive account.
+- Added resumable Drive uploads and same-name replacement to avoid duplicate
+  files on repeated backups.
+- Added Photos export support for videos already saved by the tracker.
+- Removed real OAuth and Apple signing identifiers from the repository and added
+  ignore rules for local credentials, databases, build products, and signing files.
+
+### Responsiveness
+
+- Reduced scroll-time rendering cost by removing reusable blurred card shadows,
+  thumbnail borders, and unnecessary layout animations.
+- Kept download progress updates throttled and library filtering work shared per
+  render.
+
 ## 1.0 (Build 35) — 2026-08-09
 
 ### Interface

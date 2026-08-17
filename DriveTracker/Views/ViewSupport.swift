@@ -44,7 +44,7 @@ struct RadialQuotaProgress: View {
                     style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .animation(.spring(response: 0.5, dampingFraction: 0.75), value: progress)
+                .animation(.linear(duration: 0.12), value: progress)
 
             if showLabel {
                 VStack(spacing: 0) {
@@ -235,7 +235,9 @@ extension View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(TrackerPalette.line, lineWidth: 0.5)
             }
-            .shadow(color: Color.black.opacity(0.28), radius: 12, y: 4)
+            // Avoid blurred shadows here. This modifier is used by most cards
+            // in every tab, and shadows force off-screen rendering while the
+            // user is dragging a scroll view.
     }
 
     func trackerScreen() -> some View {
@@ -317,19 +319,11 @@ struct VideoThumbnailView: View {
                     .foregroundStyle(TrackerPalette.muted)
             }
 
-            // Dark scrim overlay for high contrast metadata
-            LinearGradient(
-                colors: [Color.black.opacity(0.35), Color.clear, Color.black.opacity(0.70)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            // A flat scrim keeps scrolling on the fast compositing path.
+            Color.black.opacity(image == nil ? 0 : 0.18)
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(TrackerPalette.line, lineWidth: 0.5)
-        }
         .task(id: video.thumbnailLink) {
             image = await state.thumbnailImage(for: video)
         }

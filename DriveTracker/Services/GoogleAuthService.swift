@@ -29,6 +29,9 @@ enum GoogleAuthError: LocalizedError {
 final class GoogleAuthService: ObservableObject {
     static let driveReadOnlyScope = "https://www.googleapis.com/auth/drive.readonly"
     static let driveAppDataScope = "https://www.googleapis.com/auth/drive.appdata"
+    /// Limits write access to files and folders created by this app, including
+    /// the visible `Backup Videos` hierarchy.
+    static let driveFileScope = "https://www.googleapis.com/auth/drive.file"
 
     @Published private(set) var isSignedIn = false
     @Published private(set) var email: String?
@@ -84,7 +87,11 @@ final class GoogleAuthService: ObservableObject {
             GIDSignIn.sharedInstance.signIn(
                 withPresenting: presenter,
                 hint: hint,
-                additionalScopes: [Self.driveReadOnlyScope, Self.driveAppDataScope]
+                additionalScopes: [
+                    Self.driveReadOnlyScope,
+                    Self.driveAppDataScope,
+                    Self.driveFileScope
+                ]
             ) { result, error in
                 if let error {
                     continuation.resume(throwing: error)

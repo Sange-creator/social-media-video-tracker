@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var folderLink = ""
     @State private var confirmDeleteLocal = false
     @State private var confirmDeleteBackup = false
+    @State private var confirmVideoBackup = false
     @State private var confirmDisconnect = false
     @State private var showFolderBrowser = false
     @State private var pendingFolder: DriveFolderChoice?
@@ -62,6 +63,14 @@ struct SettingsView: View {
                 Task { await state.deleteRemoteBackup() }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Back up downloaded videos to Google Drive?", isPresented: $confirmVideoBackup) {
+            Button("Back Up Videos") {
+                Task { await state.backupVideosNow(context: context) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This uploads every downloaded video still available in Photos to Backup Videos, organized by account and subfolder, in the currently connected Google account.")
         }
         .confirmationDialog("Disconnect Google?", isPresented: $confirmDisconnect) {
             Button("Disconnect and revoke access", role: .destructive) {
@@ -502,11 +511,16 @@ struct SettingsView: View {
 
             HStack {
                 Button {
-                    Task { await state.backupNow(context: context) }
+                    confirmVideoBackup = true
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "icloud.and.arrow.up.fill")
-                        Text("Back Up Now")
+                        if state.isBackingUpVideos {
+                            ProgressView()
+                                .tint(Color(hex: "#090A0F"))
+                        } else {
+                            Image(systemName: "externaldrive.fill.badge.plus")
+                        }
+                        Text(state.isBackingUpVideos ? "Backing Up…" : "Back Up Videos")
                     }
                     .font(.caption.weight(.bold))
                     .foregroundStyle(Color(hex: "#090A0F"))
@@ -515,7 +529,7 @@ struct SettingsView: View {
                     .background(TrackerPalette.accent, in: Capsule())
                 }
                 .buttonStyle(TrackerPressButtonStyle())
-                .disabled(!auth.isSignedIn || (sources.isEmpty && !state.hasGlobalCopyQueueSheet))
+                .disabled(!auth.isSignedIn || state.isBackingUpVideos || sources.isEmpty)
 
                 Spacer()
 
@@ -526,7 +540,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Backs up account settings, daily progress, custom time slots, and copy queue history to hidden Drive storage.")
+            Text("Uploads downloaded videos to Backup Videos in the currently connected Google Drive, preserving each account and synced subfolder.")
                 .font(.caption2)
                 .foregroundStyle(TrackerPalette.muted)
         }

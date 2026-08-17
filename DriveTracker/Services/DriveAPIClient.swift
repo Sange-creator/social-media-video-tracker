@@ -338,6 +338,79 @@ final class DriveAPIClient {
         _ = try await data(for: request, allowsEmpty: true)
     }
 
+    /// Finds or creates a Drive folder below `parentID`, avoiding duplicate
+    /// backup folders when the user taps backup again later.
+    func findOrCreateFolder(named name: String, parentID: String = "root") async throws -> String {
+        if let existing = try await listChildren(of: parentID).first(where: {
+            $0.isFolder && $0.name == name
+        }) {
+            return existing.effectiveID
+        }
+
+        guard let url = URL(string: "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id") else {
+            throw DriveAPIError.malformedURL
+        }
+        var request = try await authorizedRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "name": name,
+            "mimeType": DriveItem.folderMimeType,
+            "parents": [parentID]
+        ])
+        let responseData = try await data(for: request)
+        guard let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+              let id = object["id"] as? String else {
+            throw DriveAPIError.invalidResponse
+        }
+        return id
+    }
+
+    /// Uploads a local video using Drive's resumable protocol so large files
+    /// are streamed from disk rather than copied into a giant in-memory body.
+    func uploadFile(
+        at fileURL: URL,
+        name: String,
+        mimeType: String,
+        parentID: String
+    ) async throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let existingID = try await listChildren(of: parentID)
+            .first(where: { !$0.isFolder && $0.name == name })?.effectiveID
+        let endpoint = existingID.map {
+            "https://www.googleapis.com/upload/drive/v3/files/\($0)?uploadType=resumable&supportsAllDrives=true"
+        } ?? "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true"
+        guard let startURL = URL(string: endpoint) else {
+            throw DriveAPIError.malformedURL
+        }
+        var startRequest = try await authorizedRequest(url: startURL)
+        startRequest.httpMethod = existingID == nil ? "POST" : "PATCH"
+        startRequest.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+        startRequest.setValue(mimeType, forHTTPHeaderField: "X-Upload-Content-Type")
+        startRequest.setValue("\(fileSize)", forHTTPHeaderField: "X-Upload-Content-Length")
+        startRequest.httpBody = try JSONSerialization.data(withJSONObject: existingID == nil
+            ? ["name": name, "parents": [parentID]]
+            : [:])
+        let (_, startResponse) = try await session.data(for: startRequest)
+        guard let httpResponse = startResponse as? HTTPURLResponse,
+              (200 ... 299).contains(httpResponse.statusCode),
+              let uploadURLString = httpResponse.value(forHTTPHeaderField: "Location"),
+              let uploadURL = URL(string: uploadURLString) else {
+            throw DriveAPIError.invalidResponse
+        }
+
+        var uploadRequest = try await authorizedRequest(url: uploadURL)
+        uploadRequest.httpMethod = "PUT"
+        uploadRequest.setValue(mimeType, forHTTPHeaderField: "Content-Type")
+        uploadRequest.setValue("\(fileSize)", forHTTPHeaderField: "Content-Length")
+        let (_, uploadResponse) = try await session.upload(for: uploadRequest, fromFile: fileURL)
+        guard let uploadHTTPResponse = uploadResponse as? HTTPURLResponse,
+              (200 ... 299).contains(uploadHTTPResponse.statusCode) else {
+            throw DriveAPIError.invalidResponse
+        }
+    }
+
     private func authorizedRequest(url: URL, resourceKeys: String? = nil) async throws -> URLRequest {
         let token = try await auth.accessToken()
         var request = URLRequest(url: url)

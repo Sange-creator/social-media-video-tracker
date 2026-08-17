@@ -54,6 +54,9 @@ struct LibraryView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 96)
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
@@ -158,6 +161,7 @@ private struct AccountLibraryView: View {
     ]
 
     var body: some View {
+        let videos = filteredVideos
         ScrollView {
             LazyVStack(spacing: 16) {
                 accountHeroCard
@@ -167,7 +171,7 @@ private struct AccountLibraryView: View {
                 HStack {
                     TrackerSectionLabel(
                         title: "Media Library",
-                        trailing: "\(filteredVideos.count) videos"
+                        trailing: "\(videos.count) videos"
                     )
                     Spacer()
                     Button {
@@ -179,7 +183,7 @@ private struct AccountLibraryView: View {
                     }
                 }
 
-                if filteredVideos.isEmpty {
+                if videos.isEmpty {
                     ContentUnavailableView(
                         "No matching videos",
                         systemImage: "video.slash",
@@ -189,7 +193,7 @@ private struct AccountLibraryView: View {
                     .padding(.top, 44)
                 } else if isGridView {
                     LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(filteredVideos) { video in
+                        ForEach(videos) { video in
                             LibraryVideoPosterCard(video: video) {
                                 previewVideo = video
                             }
@@ -197,7 +201,7 @@ private struct AccountLibraryView: View {
                     }
                 } else {
                     LazyVStack(spacing: 12) {
-                        ForEach(filteredVideos) { video in
+                        ForEach(videos) { video in
                             LibraryVideoListCard(video: video) {
                                 previewVideo = video
                             }
@@ -207,6 +211,9 @@ private struct AccountLibraryView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 28)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
         }
         .trackerScreen()
         .navigationTitle(account.displayName)
@@ -361,7 +368,6 @@ private struct LibraryVideoPosterCard: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.white)
                         .lineLimit(2)
-                        .shadow(color: .black.opacity(0.8), radius: 3)
 
                     if !video.folderPath.isEmpty {
                         Text(video.folderPath)
@@ -433,7 +439,6 @@ private struct LibraryVideoPosterCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(TrackerPalette.line, lineWidth: 0.5)
         }
-        .shadow(color: Color.black.opacity(0.25), radius: 10, y: 4)
     }
 }
 
