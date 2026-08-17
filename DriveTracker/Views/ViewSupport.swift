@@ -325,6 +325,12 @@ struct VideoThumbnailView: View {
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: video.thumbnailLink) {
+            // Do not start network/decode work for cells that are only visible
+            // for a frame during a fast fling. SwiftUI cancels this task when
+            // the cell leaves the lazy container, so the delay acts as a
+            // lightweight scroll-aware prefetch gate.
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
             image = await state.thumbnailImage(for: video)
         }
     }

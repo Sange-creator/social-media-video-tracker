@@ -448,13 +448,9 @@ private struct TodayVideoPosterCard: View {
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 6)
-            .background(
-                LinearGradient(
-                    colors: [.clear, Color.black.opacity(0.85), Color.black.opacity(0.95)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
+            // A flat scrim keeps the poster row on the fast compositing path
+            // while preserving readable white labels over thumbnails.
+            .background(Color.black.opacity(0.78))
         }
         .frame(width: 112, height: 154)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))

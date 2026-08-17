@@ -267,28 +267,12 @@ struct MainTabView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ZStack {
-                TodayView()
-                    .opacity(selectedTab == 0 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 0)
-
-                AnalyticsView()
-                    .opacity(selectedTab == 1 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 1)
-
-                LibraryView()
-                    .opacity(selectedTab == 2 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 2)
-
-                AccountsView()
-                    .opacity(selectedTab == 3 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 3)
-
-                SettingsView()
-                    .opacity(selectedTab == 4 ? 1 : 0)
-                    .allowsHitTesting(selectedTab == 4)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Keep only the selected tab in the view tree. The previous
+            // opacity-based stack rendered all five tabs at once, so every
+            // scroll gesture also laid out Settings, Analytics, Library,
+            // Accounts, and Today together.
+            selectedTabContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Bottom gradient veil anchored to absolute device bottom
             VStack(spacing: 0) {
@@ -316,6 +300,17 @@ struct MainTabView: View {
         .ignoresSafeArea(.all, edges: .bottom)
     }
 
+    @ViewBuilder
+    private var selectedTabContent: some View {
+        switch selectedTab {
+        case 0: TodayView()
+        case 1: AnalyticsView()
+        case 2: LibraryView()
+        case 3: AccountsView()
+        default: SettingsView()
+        }
+    }
+
     private var floatingDock: some View {
         HStack(spacing: 0) {
             dockItem(index: 0, title: "Today", icon: "calendar")
@@ -327,15 +322,13 @@ struct MainTabView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
         .background(
-            Color(hex: "#131622").opacity(0.95)
-                .background(.ultraThinMaterial)
+            Color(hex: "#131622").opacity(0.98)
         )
         .clipShape(Capsule())
         .overlay {
             Capsule()
                 .stroke(Color(hex: "#222739"), lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(0.60), radius: 24, y: 10)
         .padding(.horizontal, 16)
         .padding(.bottom, 28)
     }

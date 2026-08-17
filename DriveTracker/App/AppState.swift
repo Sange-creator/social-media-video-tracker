@@ -1,6 +1,7 @@
 import CryptoKit
 import AVFoundation
 import Foundation
+import ImageIO
 import SwiftData
 import UIKit
 
@@ -978,8 +979,23 @@ final class AppState: ObservableObject {
 
             // UIImage decoding is CPU work. Keep it off the main actor so a
             // scrolling Library never freezes while a thumbnail arrives.
-            let image = await Task.detached(priority: .utility) {
-                UIImage(data: data)
+            let image = await Task.detached(priority: .utility) { () -> UIImage? in
+                // Force a bounded decode. UIImage(data:) can defer decoding
+                // until SwiftUI composites the image, moving the expensive
+                // work back onto the render thread during a fling.
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                        source,
+                        0,
+                        [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 640
+                        ] as CFDictionary
+                      ) else {
+                    return nil
+                }
+                return UIImage(cgImage: cgImage)
             }.value
             guard let image else { return nil }
             let imageCost = image.cgImage.map {
