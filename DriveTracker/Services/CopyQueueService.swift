@@ -60,34 +60,33 @@ enum CopyQueueCSVParser {
         guard !table.isEmpty else { return [] }
 
         var firstDataRow = 0
-        if table.first?.first?
+        if let firstCell = table.first?.first?
             .replacingOccurrences(of: "\u{feff}", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .localizedCaseInsensitiveCompare("Content") == .orderedSame
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         {
-            firstDataRow = 1
+            if ["content", "title", "caption", "description", "tags", "hashtags"].contains(firstCell) {
+                firstDataRow = 1
+            }
         }
 
-        var newestByHash: [String: CopyQueueRow] = [:]
+        var rows: [CopyQueueRow] = []
         for index in firstDataRow ..< table.count {
-            guard var content = table[index].first else { continue }
-            if index == 0 {
-                content = content.replacingOccurrences(of: "\u{feff}", with: "")
+            let cells = table[index].map {
+                $0.replacingOccurrences(of: "\u{feff}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                continue
-            }
+            let nonEmpties = cells.filter { !$0.isEmpty }
+            guard !nonEmpties.isEmpty else { continue }
+            let content = nonEmpties.joined(separator: "\n\n")
             let hash = contentHash(content)
-            let row = CopyQueueRow(
-                sourceRow: index + 1,
-                content: content,
-                contentHash: hash
+            rows.append(
+                CopyQueueRow(
+                    sourceRow: index + 1,
+                    content: content,
+                    contentHash: hash
+                )
             )
-            if row.sourceRow > (newestByHash[hash]?.sourceRow ?? 0) {
-                newestByHash[hash] = row
-            }
         }
-        return newestByHash.values.sorted { $0.sourceRow < $1.sourceRow }
+        return rows.sorted { $0.sourceRow < $1.sourceRow }
     }
 
     static func contentHash(_ content: String) -> String {
@@ -261,7 +260,8 @@ final class CopyQueueService {
         let existing = try context.fetch(FetchDescriptor<CopyEntry>())
             .filter { $0.googleUserID == googleUserID }
         let existingByKey = Dictionary(
-            uniqueKeysWithValues: existing.map { ($0.identityKey, $0) }
+            existing.map { ($0.identityKey, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
         let existingByContent = Dictionary(
             grouping: existing,
@@ -281,16 +281,24 @@ final class CopyQueueService {
                 googleUserID: googleUserID,
                 accountFolderID: scopeID,
                 sourceSheetID: sheet.effectiveID,
+                sourceRow: row.sourceRow
+            )
+            let legacyKey = CopyEntry.makeIdentityKey(
+                googleUserID: googleUserID,
+                accountFolderID: scopeID,
+                sourceSheetID: sheet.effectiveID,
                 contentHash: row.contentHash
             )
-            let semanticKey = Self.semanticKey(
-                sheetID: sheet.effectiveID,
-                contentHash: row.contentHash
-            )
-            let semanticMatch = existingByContent[semanticKey]?
-                .sorted(by: Self.preferredExistingEntry)
-                .first
-            if let entry = existingByKey[key] ?? semanticMatch {
+            let legacyMatch = existing.first(where: {
+                $0.sourceSheetID == sheet.effectiveID &&
+                ($0.sourceRow == row.sourceRow || $0.identityKey == legacyKey) &&
+                !seenKeys.contains($0.identityKey)
+            })
+
+            if let entry = existingByKey[key] ?? legacyMatch {
+                if entry.identityKey != key {
+                    entry.identityKey = key
+                }
                 seenKeys.insert(entry.identityKey)
                 let metadataChanged =
                     entry.accountFolderID != scopeID ||
@@ -306,6 +314,7 @@ final class CopyQueueService {
                     entry.accountFolderID = scopeID
                     entry.sourceRow = row.sourceRow
                     entry.content = row.content
+                    entry.contentHash = row.contentHash
                     entry.driveModifiedAt = sheet.modifiedDate
                     entry.lastSeenAt = scanTime
                     entry.isMissingFromDrive = false

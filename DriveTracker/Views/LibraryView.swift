@@ -129,11 +129,20 @@ private struct LibraryAccountRow: View {
     }
 }
 
+enum MediaTypeFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case videos = "Videos"
+    case photos = "Photos"
+
+    var id: String { rawValue }
+}
+
 private struct AccountLibraryView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let account: TikTokAccount
     @State private var search = ""
+    @State private var mediaFilter: MediaTypeFilter = .all
     @State private var selectedStatus: VideoStatus?
     @State private var missingOnly = false
     @State private var previewVideo: VideoAsset?
@@ -143,6 +152,11 @@ private struct AccountLibraryView: View {
         let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
         let isSearching = !trimmed.isEmpty
         return account.videos.filter { video in
+            switch mediaFilter {
+            case .all: break
+            case .videos: guard video.isVideo else { return false }
+            case .photos: guard video.isPhoto else { return false }
+            }
             if isSearching {
                 let matches = video.name.localizedCaseInsensitiveContains(trimmed) ||
                     video.folderPath.localizedCaseInsensitiveContains(trimmed)
@@ -171,7 +185,7 @@ private struct AccountLibraryView: View {
                 HStack {
                     TrackerSectionLabel(
                         title: "Media Library",
-                        trailing: "\(videos.count) videos"
+                        trailing: "\(videos.count) \(videos.count == 1 ? "item" : "items")"
                     )
                     Spacer()
                     Button {
@@ -185,8 +199,8 @@ private struct AccountLibraryView: View {
 
                 if videos.isEmpty {
                     ContentUnavailableView(
-                        "No matching videos",
-                        systemImage: "video.slash",
+                        "No matching media",
+                        systemImage: "photo.on.rectangle.angled",
                         description: Text("Sync the folder or change the filters.")
                     )
                     .foregroundStyle(TrackerPalette.muted)
@@ -241,6 +255,13 @@ private struct AccountLibraryView: View {
         }
         .refreshable {
             await state.sync(context: context, announce: false)
+        }
+        .task {
+            ThumbnailService.shared.prefetchThumbnails(
+                for: account.videos,
+                api: state.api,
+                currentUserID: state.auth.userID
+            )
         }
     }
 
@@ -298,43 +319,52 @@ private struct AccountLibraryView: View {
     }
 
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Button {
-                    selectedStatus = nil
-                    missingOnly = false
-                } label: {
-                    FilterChip(
-                        title: "All (\(account.videos.count))",
-                        selected: selectedStatus == nil && !missingOnly
-                    )
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Media Format", selection: $mediaFilter) {
+                ForEach(MediaTypeFilter.allCases) { type in
+                    Text(type.rawValue).tag(type)
                 }
+            }
+            .pickerStyle(.segmented)
 
-                Button {
-                    selectedStatus = .available
-                    missingOnly = false
-                } label: {
-                    FilterChip(
-                        title: "Unused (\(account.availableCount))",
-                        selected: selectedStatus == .available
-                    )
-                }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button {
+                        selectedStatus = nil
+                        missingOnly = false
+                    } label: {
+                        FilterChip(
+                            title: "All Status (\(account.videos.count))",
+                            selected: selectedStatus == nil && !missingOnly
+                        )
+                    }
 
-                Button {
-                    selectedStatus = .uploaded
-                    missingOnly = false
-                } label: {
-                    FilterChip(
-                        title: "Completed (\(account.uploadedCount))",
-                        selected: selectedStatus == .uploaded
-                    )
-                }
+                    Button {
+                        selectedStatus = .available
+                        missingOnly = false
+                    } label: {
+                        FilterChip(
+                            title: "Unused (\(account.availableCount))",
+                            selected: selectedStatus == .available
+                        )
+                    }
 
-                Button {
-                    missingOnly.toggle()
-                    if missingOnly { selectedStatus = nil }
-                } label: {
-                    FilterChip(title: "Missing", selected: missingOnly)
+                    Button {
+                        selectedStatus = .uploaded
+                        missingOnly = false
+                    } label: {
+                        FilterChip(
+                            title: "Completed (\(account.uploadedCount))",
+                            selected: selectedStatus == .uploaded
+                        )
+                    }
+
+                    Button {
+                        missingOnly.toggle()
+                        if missingOnly { selectedStatus = nil }
+                    } label: {
+                        FilterChip(title: "Missing", selected: missingOnly)
+                    }
                 }
             }
         }
@@ -350,6 +380,10 @@ private struct LibraryVideoPosterCard: View {
 
     private var isDownloading: Bool {
         state.isDownloading(video)
+    }
+
+    private var isSaving: Bool {
+        state.isSavingToPhotos(video)
     }
 
     var body: some View {
@@ -372,6 +406,13 @@ private struct LibraryVideoPosterCard: View {
                             .padding(5)
                             .background(Color.black.opacity(0.7), in: Circle())
                     }
+
+                    Label(video.isPhoto ? "Photo" : "Video", systemImage: video.isPhoto ? "photo" : "video")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.65), in: Capsule())
 
                     StatusPill(status: video.status)
                 }
@@ -402,36 +443,68 @@ private struct LibraryVideoPosterCard: View {
             HStack(spacing: 8) {
                 if video.status == .available || video.status == .assigned {
                     Button {
-                        if isDownloading {
+                        if isSaving {
+                            // saving in progress
+                        } else if isDownloading {
                             state.cancelDownload(video)
                         } else {
                             state.startParallelDownload(video, context: context)
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: isDownloading ? "xmark" : "arrow.down")
-                            Text(isDownloading ? "Cancel" : "Download")
+                            if isSaving {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(TrackerPalette.accent)
+                                Text("Saving…")
+                            } else {
+                                Image(systemName: isDownloading ? "xmark" : "arrow.down")
+                                Text(isDownloading ? "Cancel" : "Download")
+                            }
                         }
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(isDownloading ? TrackerPalette.warning : Color(hex: "#090A0F"))
+                        .foregroundStyle(isSaving ? TrackerPalette.accent : (isDownloading ? TrackerPalette.warning : Color(hex: "#090A0F")))
                         .frame(maxWidth: .infinity)
                         .frame(height: 32)
-                        .background(isDownloading ? TrackerPalette.surface : TrackerPalette.accent)
+                        .background(isSaving ? TrackerPalette.raised : (isDownloading ? TrackerPalette.surface : TrackerPalette.accent))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(TrackerPressButtonStyle())
-                    .disabled(!isDownloading && (video.isMissingFromDrive || !video.canDownload))
-                } else if video.status == .uploaded {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                        Text("Saved")
+                    .disabled(isSaving || (!isDownloading && (video.isMissingFromDrive || !video.canDownload)))
+                } else {
+                    Button {
+                        if isSaving {
+                            // saving in progress
+                        } else if isDownloading {
+                            state.cancelDownload(video)
+                        } else {
+                            state.startParallelRedownload(video, context: context)
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isSaving {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .tint(TrackerPalette.accent)
+                                Text("Saving…")
+                            } else {
+                                Image(systemName: isDownloading ? "xmark" : "arrow.clockwise")
+                                Text(isDownloading ? "Cancel" : "Download Again")
+                            }
+                        }
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(isSaving ? TrackerPalette.accent : (isDownloading ? TrackerPalette.warning : TrackerPalette.accent))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(isDownloading ? TrackerPalette.surface : TrackerPalette.raised)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(TrackerPalette.accent.opacity(0.35), lineWidth: 0.8)
+                        }
                     }
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(TrackerPalette.success)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 32)
-                    .background(TrackerPalette.success.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .buttonStyle(TrackerPressButtonStyle())
+                    .disabled(isSaving || (!isDownloading && (video.isMissingFromDrive || !video.canDownload)))
                 }
 
                 NavigationLink {
@@ -469,6 +542,10 @@ private struct LibraryVideoListCard: View {
         state.isDownloading(video)
     }
 
+    private var isSaving: Bool {
+        state.isSavingToPhotos(video)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Button(action: preview) {
@@ -486,7 +563,16 @@ private struct LibraryVideoListCard: View {
                             .foregroundStyle(TrackerPalette.textPrimary)
                             .lineLimit(2)
 
-                        StatusPill(status: video.status)
+                        HStack(spacing: 6) {
+                            StatusPill(status: video.status)
+                            Label(video.isPhoto ? "Photo" : "Video", systemImage: video.isPhoto ? "photo" : "video")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(TrackerPalette.muted)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(TrackerPalette.raised)
+                                .clipShape(Capsule())
+                        }
 
                         if !video.folderPath.isEmpty {
                             Label(video.folderPath, systemImage: "folder")
@@ -515,7 +601,19 @@ private struct LibraryVideoListCard: View {
             .buttonStyle(TrackerPressButtonStyle())
             .disabled(video.isMissingFromDrive)
 
-            if isDownloading {
+            if isSaving {
+                VStack(spacing: 6) {
+                    Text("Saving to Photos…")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TrackerPalette.accent)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    ProgressView()
+                        .tint(TrackerPalette.accent)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            } else if isDownloading {
                 VStack(spacing: 6) {
                     if let progress = state.downloads.progressByIdentity[video.identityKey] {
                         let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
@@ -542,53 +640,58 @@ private struct LibraryVideoListCard: View {
             Divider().overlay(TrackerPalette.line)
 
             HStack(spacing: 0) {
-                if video.status == .available || video.status == .assigned || video.status == .uploaded {
-                    Button {
-                        if isDownloading {
-                            state.cancelDownload(video)
-                        } else if video.status == .uploaded {
-                            confirmRedownload = true
+                Button {
+                    if isSaving {
+                        // saving in progress
+                    } else if isDownloading {
+                        state.cancelDownload(video)
+                    } else if video.status == .downloaded || video.status == .uploaded {
+                        confirmRedownload = true
+                    } else {
+                        state.startParallelDownload(video, context: context)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isSaving {
+                            ProgressView()
+                                .tint(TrackerPalette.accent)
+                            Text("Saving to Photos…")
+                        } else if isDownloading {
+                            ProgressView()
+                                .tint(TrackerPalette.warning)
+                            Text("Cancel")
                         } else {
-                            state.startParallelDownload(video, context: context)
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            if isDownloading {
-                                ProgressView()
-                                    .tint(TrackerPalette.warning)
-                            } else {
-                                Image(
-                                    systemName: video.status == .uploaded
-                                        ? "arrow.clockwise"
-                                        : "arrow.down.to.line"
-                                )
-                            }
+                            Image(
+                                systemName: (video.status == .downloaded || video.status == .uploaded)
+                                    ? "arrow.clockwise"
+                                    : "arrow.down.to.line"
+                            )
                             Text(
-                                isDownloading
-                                    ? "Cancel"
-                                    : (video.status == .uploaded ? "Download Again" : "Download")
+                                (video.status == .downloaded || video.status == .uploaded) ? "Download Again" : "Download"
                             )
                         }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(
-                            isDownloading
-                                ? TrackerPalette.warning
-                                : TrackerPalette.accent
-                        )
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(TrackerPressButtonStyle())
-                    .disabled(
-                        !isDownloading &&
-                        (video.isMissingFromDrive || !video.canDownload)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(
+                        isSaving
+                            ? TrackerPalette.accent
+                            : (isDownloading
+                                ? TrackerPalette.warning
+                                : TrackerPalette.accent)
                     )
-
-                    Divider()
-                        .overlay(TrackerPalette.line)
-                        .frame(height: 24)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(TrackerPressButtonStyle())
+                .disabled(
+                    isSaving ||
+                    (!isDownloading && (video.isMissingFromDrive || !video.canDownload))
+                )
+
+                Divider()
+                    .overlay(TrackerPalette.line)
+                    .frame(height: 24)
 
                 NavigationLink {
                     VideoDetailView(video: video)
@@ -659,6 +762,17 @@ struct VideoDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The video remains in Photos. This only changes tracker history.")
+        }
+        .confirmationDialog(
+            "Do you want to download again?",
+            isPresented: $confirmRedownload
+        ) {
+            Button("Download Again") {
+                state.startParallelRedownload(video, context: context)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Another copy of \(video.name) will be saved to Photos.")
         }
         .sheet(isPresented: $showPreview) {
             VideoPreviewView(video: video)
@@ -739,6 +853,42 @@ struct VideoDetailView: View {
 
             Divider().overlay(TrackerPalette.line)
 
+            if state.isSavingToPhotos(video) {
+                VStack(spacing: 6) {
+                    Text("Saving to Photos…")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TrackerPalette.accent)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    ProgressView()
+                        .tint(TrackerPalette.accent)
+                }
+                .padding(.vertical, 4)
+            } else if state.isDownloading(video) {
+                VStack(spacing: 6) {
+                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                        let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
+                        let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
+                        Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
+                            .font(.caption.monospacedDigit().weight(.bold))
+                            .foregroundStyle(TrackerPalette.accent)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        ProgressView(value: progress.fraction)
+                            .tint(TrackerPalette.accent)
+                    } else {
+                        Text("Connecting download…")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(TrackerPalette.muted)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                        ProgressView()
+                            .tint(TrackerPalette.accent)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
             TrackerSectionLabel(title: "Actions")
             actionButtons
         }
@@ -748,7 +898,14 @@ struct VideoDetailView: View {
     @ViewBuilder
     private var actionButtons: some View {
         if video.status == .available || video.status == .assigned {
-            if state.isDownloading(video) {
+            if state.isSavingToPhotos(video) {
+                Button {} label: {
+                    Label("Saving to Photos…", systemImage: "arrow.down.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                .disabled(true)
+            } else if state.isDownloading(video) {
                 Button {
                     state.cancelDownload(video)
                 } label: {
@@ -790,8 +947,60 @@ struct VideoDetailView: View {
             .disabled(state.isDownloading(video))
         }
 
+        if video.status == .downloaded {
+            if state.isSavingToPhotos(video) {
+                Button {} label: {
+                    Label("Saving to Photos…", systemImage: "arrow.down.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                .disabled(true)
+            } else if state.isDownloading(video) {
+                Button {
+                    state.cancelDownload(video)
+                } label: {
+                    Label("Cancel Download", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            } else {
+                Button {
+                    confirmRedownload = true
+                } label: {
+                    Label("Download Another Copy", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                .disabled(video.isMissingFromDrive || !video.canDownload)
+            }
+
+            Button {
+                state.markUploaded(video, context: context)
+            } label: {
+                Label("Mark as Completed", systemImage: "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            .disabled(state.isDownloading(video))
+
+            Button {
+                confirmReset = true
+            } label: {
+                Label("Reset Status", systemImage: "arrow.counterclockwise")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+        }
+
         if video.status == .uploaded {
-            if state.isDownloading(video) {
+            if state.isSavingToPhotos(video) {
+                Button {} label: {
+                    Label("Saving to Photos…", systemImage: "arrow.down.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                .disabled(true)
+            } else if state.isDownloading(video) {
                 Button {
                     state.cancelDownload(video)
                 } label: {
@@ -872,6 +1081,7 @@ struct VideoPreviewView: View {
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
 
+    @State private var photoImage: UIImage?
     @State private var player: AVPlayer?
     @State private var isLoading = true
     @State private var loadError: String?
@@ -894,32 +1104,70 @@ struct VideoPreviewView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    // Video Player Frame
-                    ZStack {
-                        if isLoading {
-                            ZStack {
-                                VideoThumbnailView(video: video, width: 220, height: 330, cornerRadius: 16)
-                                    .opacity(0.60)
-                                VStack(spacing: 12) {
-                                    ProgressView()
-                                        .controlSize(.large)
-                                        .tint(TrackerPalette.accent)
-                                    Text("Streaming from Drive…")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(TrackerPalette.textPrimary)
+                    if video.isPhoto {
+                        // Photo Viewer Frame
+                        ZStack {
+                            if let photoImage {
+                                Image(uiImage: photoImage)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .background(Color.black)
+                                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .stroke(TrackerPalette.line, lineWidth: 0.5)
+                                    }
+                                    .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 500)
+                            } else if isLoading {
+                                ZStack {
+                                    VideoThumbnailView(video: video, width: 220, height: 330, cornerRadius: 16)
+                                        .opacity(0.60)
+                                    VStack(spacing: 12) {
+                                        ProgressView()
+                                            .controlSize(.large)
+                                            .tint(TrackerPalette.accent)
+                                        Text("Loading photo from Drive…")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(TrackerPalette.textPrimary)
+                                    }
                                 }
+                                .frame(height: 380)
+                            } else if let loadError {
+                                ContentUnavailableView(
+                                    "Preview unavailable",
+                                    systemImage: "exclamationmark.triangle",
+                                    description: Text(loadError)
+                                )
+                                .frame(height: 320)
                             }
-                            .frame(height: 380)
-                        } else if let loadError {
-                            ContentUnavailableView(
-                                "Preview unavailable",
-                                systemImage: "exclamationmark.triangle",
-                                description: Text(loadError)
-                            )
-                            .frame(height: 320)
-                        } else if let player {
-                            VStack(spacing: 12) {
-                                VideoPlayer(player: player)
+                        }
+                    } else {
+                        // Video Player Frame
+                        ZStack {
+                            if isLoading {
+                                ZStack {
+                                    VideoThumbnailView(video: video, width: 220, height: 330, cornerRadius: 16)
+                                        .opacity(0.60)
+                                    VStack(spacing: 12) {
+                                        ProgressView()
+                                            .controlSize(.large)
+                                            .tint(TrackerPalette.accent)
+                                        Text("Streaming from Drive…")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(TrackerPalette.textPrimary)
+                                    }
+                                }
+                                .frame(height: 380)
+                            } else if let loadError {
+                                ContentUnavailableView(
+                                    "Preview unavailable",
+                                    systemImage: "exclamationmark.triangle",
+                                    description: Text(loadError)
+                                )
+                                .frame(height: 320)
+                            } else if let player {
+                                VStack(spacing: 12) {
+                                    VideoPlayer(player: player)
                                     .background(Color.black)
                                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                                     .overlay {
@@ -1052,6 +1300,7 @@ struct VideoPreviewView: View {
                             }
                         }
                     }
+                }
 
                     // Metadata & Technical Specs Inspector
                     VStack(alignment: .leading, spacing: 10) {
@@ -1088,7 +1337,7 @@ struct VideoPreviewView: View {
 
                     // Action Dock
                     VStack(spacing: 10) {
-                        if video.status != .uploaded {
+                        if video.status == .available || video.status == .assigned {
                             Button {
                                 state.startParallelDownload(video, context: context)
                                 dismiss()
@@ -1109,10 +1358,24 @@ struct VideoPreviewView: View {
                             }
                             .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
                         } else {
-                            HStack {
-                                Label("Completed & Saved to Photos", systemImage: "checkmark.circle.fill")
+                            Button {
+                                state.startParallelRedownload(video, context: context)
+                                dismiss()
+                            } label: {
+                                Label("Download Another Copy to Photos", systemImage: "arrow.clockwise")
                                     .font(.subheadline.weight(.bold))
-                                    .foregroundStyle(TrackerPalette.success)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                            .disabled(video.isMissingFromDrive || !video.canDownload)
+
+                            HStack {
+                                Label(
+                                    video.status == .uploaded ? "Completed & Saved to Photos" : "Downloaded to Photos",
+                                    systemImage: "checkmark.circle.fill"
+                                )
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(TrackerPalette.success)
                                 Spacer()
                             }
                             .padding(.horizontal, 4)
@@ -1123,7 +1386,7 @@ struct VideoPreviewView: View {
                 .padding(.bottom, 24)
             }
             .trackerScreen()
-            .navigationTitle("Video Preview")
+            .navigationTitle(video.isPhoto ? "Photo Preview" : "Video Preview")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1163,20 +1426,47 @@ struct VideoPreviewView: View {
     private func loadPreview() async {
         isLoading = true
         loadError = nil
+        if video.isPhoto {
+            if let cached = ThumbnailService.shared.cachedImage(for: video.identityKey) {
+                photoImage = cached
+                isLoading = false
+            }
+            if let loaded = await ThumbnailService.shared.thumbnailImage(
+                for: video,
+                api: state.api,
+                currentUserID: state.auth.userID
+            ) {
+                photoImage = loaded
+                isLoading = false
+            } else if photoImage == nil {
+                loadError = "Could not load photo preview from Drive."
+                isLoading = false
+            }
+            return
+        }
+
         do {
             try configureAudioSession()
             let item = try await state.previewPlayerItem(video)
-            try await validate(item)
             installPlayer(item)
+            isLoading = false
+            
+            // Asynchronously resolve duration off the critical playback start path
+            Task(priority: .utility) {
+                if let loadedDuration = try? await item.asset.load(.duration),
+                   loadedDuration.isNumeric,
+                   loadedDuration.seconds > 0 {
+                    await MainActor.run {
+                        self.duration = loadedDuration.seconds
+                    }
+                }
+            }
         } catch {
             await loadLocalFallback(streamError: error)
         }
-        isLoading = false
     }
 
     private func validate(_ item: AVPlayerItem) async throws {
-        let playable = try await item.asset.load(.isPlayable)
-        guard playable else { throw VideoPreviewError.notPlayable }
         if let loadedDuration = try? await item.asset.load(.duration),
            loadedDuration.isNumeric,
            loadedDuration.seconds > 0 {
@@ -1188,7 +1478,7 @@ struct VideoPreviewView: View {
         if let token = timeObserverToken, let player {
             player.removeTimeObserver(token)
         }
-        item.preferredForwardBufferDuration = isUsingLocalPreview ? 0 : 2
+        item.preferredForwardBufferDuration = isUsingLocalPreview ? 0 : 0.8
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         let streamPlayer = AVPlayer(playerItem: item)
         streamPlayer.automaticallyWaitsToMinimizeStalling = !isUsingLocalPreview
@@ -1196,20 +1486,20 @@ struct VideoPreviewView: View {
         streamPlayer.isMuted = isMuted
         player = streamPlayer
 
-        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        let interval = CMTime(seconds: 0.15, preferredTimescale: 600)
         timeObserverToken = streamPlayer.addPeriodicTimeObserver(
             forInterval: interval,
             queue: .main
-        ) { time in
+        ) { [weak streamPlayer] time in
             Task { @MainActor in
                 guard !isEditingSlider else { return }
                 currentTime = time.seconds
-                if let itemDuration = streamPlayer.currentItem?.duration.seconds,
+                if let itemDuration = streamPlayer?.currentItem?.duration.seconds,
                    itemDuration.isFinite,
                    itemDuration > 0 {
                     duration = itemDuration
                 }
-                isPlaying = streamPlayer.timeControlStatus == .playing
+                isPlaying = streamPlayer?.timeControlStatus == .playing
             }
         }
 

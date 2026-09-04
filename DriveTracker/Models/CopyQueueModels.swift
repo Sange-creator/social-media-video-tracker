@@ -55,7 +55,7 @@ final class CopyEntry {
             googleUserID: googleUserID,
             accountFolderID: accountFolderID,
             sourceSheetID: sourceSheetID,
-            contentHash: contentHash
+            sourceRow: sourceRow
         )
         self.googleUserID = googleUserID
         self.accountFolderID = accountFolderID
@@ -78,9 +78,25 @@ final class CopyEntry {
         googleUserID: String,
         accountFolderID: String,
         sourceSheetID: String,
+        sourceRow: Int
+    ) -> String {
+        "\(googleUserID)|\(accountFolderID)|\(sourceSheetID)|row_\(sourceRow)"
+    }
+
+    static func makeIdentityKey(
+        googleUserID: String,
+        accountFolderID: String,
+        sourceSheetID: String,
         contentHash: String
     ) -> String {
         "\(googleUserID)|\(accountFolderID)|\(sourceSheetID)|\(contentHash)"
+    }
+
+    var parts: [String] {
+        content
+            .components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
 

@@ -26,28 +26,7 @@ struct DriveTrackerApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var state = AppState()
 
-    private let container: ModelContainer = {
-        let schema = Schema([
-            DriveSource.self,
-            TikTokAccount.self,
-            VideoAsset.self,
-            DailyAssignment.self,
-            StatusEvent.self,
-            CopyEntry.self,
-            CopyEvent.self
-        ])
-        let configuration = ModelConfiguration(
-            "DriveTracker",
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            allowsSave: true
-        )
-        do {
-            return try ModelContainer(for: schema, configurations: [configuration])
-        } catch {
-            fatalError("Could not create the tracker database: \(error)")
-        }
-    }()
+    private let container: ModelContainer = ModelContainerFactory.createContainer()
 
     var body: some Scene {
         WindowGroup {
@@ -71,5 +50,55 @@ struct DriveTrackerApp: App {
                 }
             }
         }
+    }
+}
+
+enum ModelContainerFactory {
+    static let schema = Schema([
+        DriveSource.self,
+        TikTokAccount.self,
+        VideoAsset.self,
+        DailyAssignment.self,
+        StatusEvent.self,
+        CopyEntry.self,
+        CopyEvent.self
+    ])
+
+    static func createContainer() -> ModelContainer {
+        let fileManager = FileManager.default
+        if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            try? fileManager.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        }
+
+        let configuration = ModelConfiguration(
+            "DriveTracker",
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            allowsSave: true
+        )
+
+        // Attempt 1: Persistent store with DriveTracker schema
+        do {
+            return try ModelContainer(for: schema, configurations: [configuration])
+        } catch {
+            print("[DriveTracker] Failed to create persistent ModelContainer: \(error)")
+        }
+
+        // Attempt 2: Fallback to default persistent store configuration
+        if let defaultContainer = try? ModelContainer(for: schema) {
+            return defaultContainer
+        }
+
+        // Attempt 3: In-memory fallback if disk storage is entirely unavailable
+        let memoryConfig = ModelConfiguration(
+            "DriveTracker_Memory",
+            schema: schema,
+            isStoredInMemoryOnly: true,
+            allowsSave: true
+        )
+        if let memContainer = try? ModelContainer(for: schema, configurations: [memoryConfig]) {
+            return memContainer
+        }
+        return try! ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
     }
 }

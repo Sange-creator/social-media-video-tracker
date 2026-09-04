@@ -1,5 +1,6 @@
 import CryptoKit
 import AVFoundation
+import Combine
 import Foundation
 import ImageIO
 import SwiftData
@@ -20,8 +21,10 @@ final class AppState: ObservableObject {
     @Published var lastSyncAt: Date?
     @Published private(set) var analyticsSnapshot: AnalyticsSnapshot
     @Published private(set) var activeDownloadIdentities: Set<String> = []
+    @Published private(set) var savingIdentities: Set<String> = []
     @Published private(set) var isBackingUpVideos = false
     private var activeDownloadTasks: [String: Task<Void, Never>] = [:]
+    private var cancellables = Set<AnyCancellable>()
     @Published private(set) var reminderTimeZoneID: String
     @Published private(set) var globalCopyQueueLastSyncedAt: Date? {
         didSet { defaults.set(globalCopyQueueLastSyncedAt, forKey: Keys.globalCopyQueueLastSyncedAt) }
@@ -98,6 +101,12 @@ final class AppState: ObservableObject {
         self.globalCopyQueueLastSyncedAt =
             defaults.object(forKey: Keys.globalCopyQueueLastSyncedAt) as? Date
         defaults.set(self.globalCopyQueueLink, forKey: Keys.globalCopyQueueLink)
+
+        downloads.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
     }
 
     var hasRootFolder: Bool { !rootFolderID.isEmpty }
@@ -554,6 +563,14 @@ final class AppState: ObservableObject {
         activeDownloadIdentities.contains(video.identityKey)
     }
 
+    func isSavingToPhotos(_ identityKey: String) -> Bool {
+        savingIdentities.contains(identityKey)
+    }
+
+    func isSavingToPhotos(_ video: VideoAsset) -> Bool {
+        savingIdentities.contains(video.identityKey)
+    }
+
     func download(_ video: VideoAsset, context: ModelContext) async {
         guard reserveDownload(video, kind: .initial) else { return }
         await performReservedDownload(video, context: context)
@@ -561,6 +578,7 @@ final class AppState: ObservableObject {
 
     private func performReservedDownload(_ video: VideoAsset, context: ModelContext) async {
         defer {
+            savingIdentities.remove(video.identityKey)
             activeDownloadIdentities.remove(video.identityKey)
             activeDownloadTasks.removeValue(forKey: video.identityKey)
         }
@@ -573,11 +591,17 @@ final class AppState: ObservableObject {
             }
             try assignmentEngine.markDownloadStarted(video, context: context)
             let request = try await api.downloadRequest(for: video)
-            let localURL = try await downloads.download(request: request, identity: video.identityKey)
+            let localURL = try await downloads.download(
+                request: request,
+                identity: video.identityKey,
+                expectedFileName: video.name
+            )
             defer { try? FileManager.default.removeItem(at: localURL) }
+            savingIdentities.insert(video.identityKey)
             try await verifyOriginalFile(video: video, localURL: localURL)
-            let photoID = try await photoLibrary.saveVideo(
+            let photoID = try await photoLibrary.saveMedia(
                 at: localURL,
+                isPhoto: video.isPhoto,
                 accountName: accountAlbumName(for: video)
             )
             try assignmentEngine.completeVerifiedDownload(
@@ -624,6 +648,10 @@ final class AppState: ObservableObject {
 
     func cancelDownload(_ video: VideoAsset) {
         guard activeDownloadIdentities.contains(video.identityKey) else { return }
+        guard !savingIdentities.contains(video.identityKey) else {
+            toastMessage = "Saving to Photos in progress…"
+            return
+        }
         downloads.cancel(identity: video.identityKey)
         activeDownloadTasks[video.identityKey]?.cancel()
         // The task owns its reservation and releases it in defer. Keeping the
@@ -748,6 +776,37 @@ final class AppState: ObservableObject {
         }
     }
 
+    func copyCustomTextToClipboard(_ text: String, for entry: CopyEntry, label: String, context: ModelContext) {
+        let wasCopied = entry.copiedAt != nil
+        let timestamp = Date.now
+        UIPasteboard.general.string = text
+        guard UIPasteboard.general.string == text else {
+            errorMessage = "The text could not be placed on the clipboard. Please try again."
+            return
+        }
+        entry.copiedAt = timestamp
+        entry.copyCount += 1
+        entry.updatedAt = timestamp
+        context.insert(
+            CopyEvent(
+                kind: wasCopied ? .recopied : .copied,
+                timestamp: timestamp,
+                detail: "Copied \(label) from Queue row \(entry.sourceRow)",
+                accountName: "Global Copy Queue",
+                entryIdentityKey: entry.identityKey,
+                contentPreview: text,
+                entry: entry
+            )
+        )
+        do {
+            try context.save()
+            toastMessage = "Copied \(label) to clipboard"
+            scheduleBackup(context: context)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func markCopyEntryUncopied(_ entry: CopyEntry, context: ModelContext) {
         entry.copiedAt = nil
         entry.updatedAt = .now
@@ -780,6 +839,7 @@ final class AppState: ObservableObject {
 
     private func performReservedRedownload(_ video: VideoAsset, context: ModelContext) async {
         defer {
+            savingIdentities.remove(video.identityKey)
             activeDownloadIdentities.remove(video.identityKey)
             activeDownloadTasks.removeValue(forKey: video.identityKey)
         }
@@ -791,11 +851,17 @@ final class AppState: ObservableObject {
                 throw DriveAssociationError.videoMissing
             }
             let request = try await api.downloadRequest(for: video)
-            let localURL = try await downloads.download(request: request, identity: video.identityKey)
+            let localURL = try await downloads.download(
+                request: request,
+                identity: video.identityKey,
+                expectedFileName: video.name
+            )
             defer { try? FileManager.default.removeItem(at: localURL) }
+            savingIdentities.insert(video.identityKey)
             try await verifyOriginalFile(video: video, localURL: localURL)
-            let photoID = try await photoLibrary.saveVideo(
+            let photoID = try await photoLibrary.saveMedia(
                 at: localURL,
+                isPhoto: video.isPhoto,
                 accountName: accountAlbumName(for: video)
             )
             try recordRedownloadCompletion(video, photoID: photoID, context: context)
@@ -832,21 +898,19 @@ final class AppState: ObservableObject {
         switch kind {
         case .initial:
             guard video.status == .available || video.status == .assigned else {
-                errorMessage = "This video is no longer waiting to be downloaded. Refresh and try again."
+                errorMessage = "This video is already downloaded. Tap 'Download Again' to save another copy."
                 return false
             }
         case .additionalCopy:
-            guard video.status == .uploaded else {
-                errorMessage = "Only completed videos can be downloaded again."
-                return false
-            }
+            // Allow downloading an additional copy of any tracked video from Drive
+            break
         }
 
         // Reserve synchronously so repeated taps cannot create duplicate
         // background URLSession tasks before the first Task starts running.
         activeDownloadIdentities.insert(video.identityKey)
         toastMessage = kind == .additionalCopy
-            ? "Downloading another copy of \(video.name)"
+            ? "Downloading copy of \(video.name)..."
             : "Download started for \(video.name)"
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         return true
@@ -964,20 +1028,83 @@ final class AppState: ObservableObject {
         }
     }
 
-    func deleteAccount(_ account: TikTokAccount, context: ModelContext) {
+    func deleteAccount(accountID: UUID, context: ModelContext) {
         do {
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+            guard let account = accounts.first(where: { $0.id == accountID }) else {
+                return
+            }
             let sourceID = account.sourceID
+            let googleUserID = account.googleUserID
+            let folderID = account.driveFolderID
+
+            // 1. Fetch all videos for this account
+            let allVideos = try context.fetch(FetchDescriptor<VideoAsset>())
+            let videos = allVideos.filter {
+                $0.account?.id == accountID ||
+                ($0.googleUserID == googleUserID && $0.accountFolderID == folderID)
+            }
+            let videoKeys = Set(videos.map(\.identityKey))
+
+            // 2. Delete StatusEvents linked to these videos
+            let allEvents = try context.fetch(FetchDescriptor<StatusEvent>())
+            for event in allEvents where videoKeys.contains(event.video?.identityKey ?? "") || event.video == nil {
+                if let video = event.video, videoKeys.contains(video.identityKey) {
+                    context.delete(event)
+                }
+            }
+
+            // 3. Delete DailyAssignments linked to this account or these videos
+            let allAssignments = try context.fetch(FetchDescriptor<DailyAssignment>())
+            for assignment in allAssignments {
+                if assignment.account?.id == accountID || videoKeys.contains(assignment.video?.identityKey ?? "") {
+                    context.delete(assignment)
+                }
+            }
+
+            // 4. Fetch all CopyEntries for this account
+            let allCopyEntries = try context.fetch(FetchDescriptor<CopyEntry>())
+            let copyEntries = allCopyEntries.filter {
+                $0.account?.id == accountID ||
+                ($0.googleUserID == googleUserID && $0.accountFolderID == folderID)
+            }
+            let copyEntryKeys = Set(copyEntries.map(\.identityKey))
+
+            // 5. Delete CopyEvents linked to these copy entries
+            let allCopyEvents = try context.fetch(FetchDescriptor<CopyEvent>())
+            for copyEvent in allCopyEvents {
+                if let entry = copyEvent.entry, copyEntryKeys.contains(entry.identityKey) {
+                    context.delete(copyEvent)
+                }
+            }
+
+            // 6. Delete CopyEntries
+            for entry in copyEntries {
+                context.delete(entry)
+            }
+
+            // 7. Delete VideoAssets
+            for video in videos {
+                context.delete(video)
+            }
+
+            // 8. Delete the TikTokAccount
             context.delete(account)
+
+            // 9. Delete orphaned DriveSource if no other accounts reference it
             if let sourceID {
                 let remainingAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
-                    .filter { $0.sourceID == sourceID && $0.id != account.id }
+                    .filter { $0.sourceID == sourceID && $0.id != accountID }
                 if remainingAccounts.isEmpty,
                    let source = try context.fetch(FetchDescriptor<DriveSource>())
                     .first(where: { $0.id == sourceID }) {
                     context.delete(source)
                 }
             }
+
             try context.save()
+
+            // 10. Update active source configuration
             if let userID = auth.userID {
                 _ = try activateDriveSourceConfiguration(for: userID, context: context)
             } else if try context.fetchCount(FetchDescriptor<DriveSource>()) == 0 {
@@ -985,12 +1112,17 @@ final class AppState: ObservableObject {
                 rootFolderID = ""
                 rootResourceKey = nil
             }
+
             try ensureToday(context: context)
             statusMessage = "Account removed from the tracker. Google Drive files were not deleted."
             scheduleBackup(context: context)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "Failed to remove account: \(error.localizedDescription)"
         }
+    }
+
+    func deleteAccount(_ account: TikTokAccount, context: ModelContext) {
+        deleteAccount(accountID: account.id, context: context)
     }
 
     func previewFile(_ video: VideoAsset) async throws -> URL {
@@ -1010,7 +1142,8 @@ final class AppState: ObservableObject {
         guard !video.isMissingFromDrive else {
             throw DriveAssociationError.videoMissing
         }
-        return try await api.streamingPlayerItem(for: video)
+        let localURL = try await api.previewFile(for: video)
+        return AVPlayerItem(url: localURL)
     }
 
     func thumbnailImage(for video: VideoAsset) async -> UIImage? {
@@ -1088,7 +1221,7 @@ final class AppState: ObservableObject {
                 throw VideoBackupError.noVideos
             }
 
-            let accountByID = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
+            let accountByID = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             let rootID = try await api.findOrCreateFolder(named: "Backup Videos")
             var folderIDs: [String: String] = [:]
             var backedUpCount = 0
@@ -1288,19 +1421,19 @@ final class AppState: ObservableObject {
         do {
             let demoAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
                 .filter { $0.googleUserID == "demo-user" }
-            let demoVideos = try context.fetch(FetchDescriptor<VideoAsset>())
-                .filter { $0.googleUserID == "demo-user" }
-            guard !demoAccounts.isEmpty || !demoVideos.isEmpty else { return }
-
             for account in demoAccounts {
-                context.delete(account)
+                deleteAccount(accountID: account.id, context: context)
             }
-            for video in demoVideos where video.account == nil {
+            let orphanedDemoVideos = try context.fetch(FetchDescriptor<VideoAsset>())
+                .filter { $0.googleUserID == "demo-user" && $0.account == nil }
+            for video in orphanedDemoVideos {
                 context.delete(video)
             }
-            try context.save()
+            if !orphanedDemoVideos.isEmpty {
+                try context.save()
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            print("[DriveTracker] Purge legacy demo data: \(error)")
         }
     }
 
@@ -1457,7 +1590,11 @@ final class AppState: ObservableObject {
         localURL: URL,
         context: ModelContext
     ) async {
-        defer { try? FileManager.default.removeItem(at: localURL) }
+        defer {
+            savingIdentities.remove(identity)
+            try? FileManager.default.removeItem(at: localURL)
+        }
+        savingIdentities.insert(identity)
         do {
             let videos = try context.fetch(FetchDescriptor<VideoAsset>())
             guard let video = videos.first(where: { $0.identityKey == identity }) else {
@@ -1465,8 +1602,9 @@ final class AppState: ObservableObject {
             }
             let isAdditionalCopy = video.status == .uploaded
             try await verifyOriginalFile(video: video, localURL: localURL)
-            let photoID = try await photoLibrary.saveVideo(
+            let photoID = try await photoLibrary.saveMedia(
                 at: localURL,
+                isPhoto: video.isPhoto,
                 accountName: accountAlbumName(for: video)
             )
             if isAdditionalCopy {
@@ -1520,7 +1658,8 @@ final class AppState: ObservableObject {
 
     private func verifyOriginalFile(video: VideoAsset, localURL: URL) async throws {
         let expectedSize = video.size
-        let expectedChecksum = video.checksum
+        let shouldVerifyChecksum = video.account?.strictChecksum ?? true
+        let expectedChecksum = shouldVerifyChecksum ? video.checksum : nil
         try await Task.detached(priority: .utility) {
             let attributes = try FileManager.default.attributesOfItem(atPath: localURL.path)
             if let expectedSize,

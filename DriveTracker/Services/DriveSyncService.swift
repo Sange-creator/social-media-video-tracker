@@ -37,7 +37,8 @@ final class DriveSyncService {
             )
         )
         let existingVideoByKey = Dictionary(
-            uniqueKeysWithValues: accountVideos.map { ($0.identityKey, $0) }
+            accountVideos.map { ($0.identityKey, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
         let scanTime = Date.now
         var seenVideoKeys = Set<String>()
@@ -166,7 +167,7 @@ final class DriveSyncService {
     ) async throws -> [LocatedVideo] {
         guard visitedFolders.insert(folderID).inserted else { return [] }
         let children = try await api.listChildren(of: folderID, folderResourceKey: resourceKey)
-        var videos = children.filter(\.isVideo).map {
+        var videos = children.filter(\.isMedia).map {
             LocatedVideo(item: $0, folderPath: path)
         }
         for folder in children where folder.isFolder {

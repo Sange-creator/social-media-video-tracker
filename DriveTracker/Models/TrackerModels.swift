@@ -384,6 +384,31 @@ final class VideoAsset {
         if activeAssignment != nil { return .assigned }
         return .available
     }
+
+    var isPhoto: Bool {
+        if mimeType.hasPrefix("image/") {
+            return true
+        }
+        let lower = name.lowercased()
+        return lower.hasSuffix(".jpg") ||
+            lower.hasSuffix(".jpeg") ||
+            lower.hasSuffix(".png") ||
+            lower.hasSuffix(".heic") ||
+            lower.hasSuffix(".heif") ||
+            lower.hasSuffix(".webp")
+    }
+
+    var isVideo: Bool {
+        !isPhoto
+    }
+
+    var mediaTypeLabel: String {
+        isPhoto ? "Photo" : "Video"
+    }
+
+    var mediaIconName: String {
+        isPhoto ? "photo" : "video"
+    }
 }
 
 @Model

@@ -637,8 +637,12 @@ struct FolderAssociationView: View {
                 Section {
                     Picker("Target time zone", selection: $draftTimeZoneID) {
                         Text("App default (\(state.reminderTimeZoneID.split(separator: "/").last ?? "ET"))").tag("")
-                        ForEach(USReminderTimeZone.allCases) { zone in
-                            Text("\(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
+                        ForEach(CreatorReminderTimeZone.groupedByRegion) { group in
+                            Section(header: Text("\(group.flag) \(group.name)")) {
+                                ForEach(group.zones) { zone in
+                                    Text("\(zone.flag) \(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
+                                }
+                            }
                         }
                     }
 

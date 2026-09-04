@@ -46,12 +46,7 @@ struct TodayView: View {
                     .padding(.top, 6)
 
                     ForEach(visibleAccounts) { account in
-                        NavigationLink {
-                            TodayAccountDetailView(account: account)
-                        } label: {
-                            TodayAccountRow(account: account)
-                        }
-                        .buttonStyle(TrackerPressButtonStyle())
+                        TodayAccountRow(account: account)
                     }
 
                     if visibleAccounts.isEmpty {
@@ -83,6 +78,12 @@ struct TodayView: View {
             try? state.ensureToday(context: context)
             await state.scheduleDownloadNotifications(context: context)
             await state.checkForDriveChanges(context: context)
+            let todayCandidates = Array(activeAccounts.flatMap { $0.videos.filter { $0.status == .assigned || $0.status == .available } }.prefix(12))
+            ThumbnailService.shared.prefetchThumbnails(
+                for: todayCandidates,
+                api: state.api,
+                currentUserID: state.auth.userID
+            )
         }
     }
 
@@ -312,38 +313,44 @@ private struct TodayAccountRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                AccountIdentityIcon(
-                    symbol: account.iconSymbol,
-                    colorHex: account.iconColorHex,
-                    size: 46
-                )
+            NavigationLink {
+                TodayAccountDetailView(account: account)
+            } label: {
+                HStack(spacing: 12) {
+                    AccountIdentityIcon(
+                        symbol: account.iconSymbol,
+                        colorHex: account.iconColorHex,
+                        size: 46
+                    )
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(account.displayName)
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(TrackerPalette.textPrimary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(account.displayName)
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(TrackerPalette.textPrimary)
+                            .lineLimit(1)
+
+                        HStack(spacing: 6) {
+                            Text(account.folderName)
+                                .font(.caption)
+                                .foregroundStyle(TrackerPalette.muted)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer()
 
                     HStack(spacing: 6) {
-                        Text(account.folderName)
-                            .font(.caption)
+                        Text("\(completedCount)/\(account.dailyQuota)")
+                            .font(.system(.subheadline, design: .rounded).monospacedDigit().weight(.bold))
+                            .foregroundStyle(completedCount >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(TrackerPalette.muted)
-                            .lineLimit(1)
                     }
                 }
-
-                Spacer()
-
-                HStack(spacing: 6) {
-                    Text("\(completedCount)/\(account.dailyQuota)")
-                        .font(.system(.subheadline, design: .rounded).monospacedDigit().weight(.bold))
-                        .foregroundStyle(completedCount >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(TrackerPalette.muted)
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(TrackerPressButtonStyle())
 
             if !todaysVideos.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -358,7 +365,6 @@ private struct TodayAccountRow: View {
             }
         }
         .trackerCard(padding: 14)
-        .contentShape(Rectangle())
     }
 }
 
@@ -369,6 +375,10 @@ private struct TodayVideoPosterCard: View {
 
     private var isDownloading: Bool {
         state.isDownloading(video)
+    }
+
+    private var isSaving: Bool {
+        state.isSavingToPhotos(video)
     }
 
     var body: some View {
@@ -385,6 +395,13 @@ private struct TodayVideoPosterCard: View {
                 HStack {
                     StatusPill(status: video.status)
                     Spacer()
+                    if video.isPhoto {
+                        Image(systemName: "photo")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(4)
+                            .background(Color.black.opacity(0.65), in: Circle())
+                    }
                 }
                 Spacer()
             }
@@ -399,7 +416,9 @@ private struct TodayVideoPosterCard: View {
 
                 if video.status == .assigned || video.status == .available {
                     Button {
-                        if isDownloading {
+                        if isSaving {
+                            // Saving in progress
+                        } else if isDownloading {
                             state.cancelDownload(video)
                         } else {
                             state.startParallelDownload(video, context: context)
@@ -414,7 +433,7 @@ private struct TodayVideoPosterCard: View {
                                 Image(systemName: "arrow.down")
                                     .font(.system(size: 9, weight: .black))
                             }
-                            Text(isDownloading ? "..." : "Get")
+                            Text(isSaving ? "Saving" : (isDownloading ? "..." : "Get"))
                                 .font(.system(size: 10, weight: .black))
                         }
                         .foregroundStyle(Color(hex: "#090A0F"))
@@ -423,6 +442,7 @@ private struct TodayVideoPosterCard: View {
                         .background(TrackerPalette.accent, in: Capsule())
                     }
                     .buttonStyle(TrackerPressButtonStyle())
+                    .disabled(isSaving)
                 } else if video.status == .downloaded {
                     Button {
                         state.markCompletedOutsideApp(video, context: context)
@@ -701,21 +721,60 @@ private struct ManualVideoPickerView: View {
                                     previewVideo = video
                                 }
 
+                                if state.isSavingToPhotos(video) {
+                                    VStack(spacing: 6) {
+                                        HStack {
+                                            Text("Saving to Photos…")
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(TrackerPalette.accent)
+                                            Spacer()
+                                        }
+                                        ProgressView()
+                                            .tint(TrackerPalette.accent)
+                                    }
+                                    .padding(.vertical, 2)
+                                } else if state.isDownloading(video) {
+                                    let progress = state.downloads.progressByIdentity[video.identityKey]
+                                    let fraction = progress?.fraction ?? 0
+                                    let percent = Int(fraction * 100)
+
+                                    VStack(spacing: 6) {
+                                        HStack {
+                                            Text(fraction > 0 ? "Downloading \(percent)%" : "Downloading from Drive…")
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(TrackerPalette.accent)
+                                            Spacer()
+                                            if let bytes = progress?.bytesWritten, let total = progress?.totalBytes, total > 0 {
+                                                Text("\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
+                                                    .font(.caption2.monospacedDigit())
+                                                    .foregroundStyle(TrackerPalette.muted)
+                                            }
+                                        }
+
+                                        ProgressView(value: fraction > 0 ? fraction : nil)
+                                            .tint(TrackerPalette.accent)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+
                                 HStack(spacing: 10) {
                                     Button {
-                                        if state.isDownloading(video) {
+                                        if state.isSavingToPhotos(video) {
+                                            // saving in progress
+                                        } else if state.isDownloading(video) {
                                             state.cancelDownload(video)
                                         } else {
                                             state.startParallelDownload(video, context: context)
                                         }
                                     } label: {
                                         Label(
-                                            state.isDownloading(video) ? "Cancel Download" : "Download Now",
-                                            systemImage: state.isDownloading(video) ? "xmark.circle.fill" : "arrow.down.circle.fill"
+                                            state.isSavingToPhotos(video) ? "Saving to Photos…" : (state.isDownloading(video) ? "Cancel Download" : "Download Now"),
+                                            systemImage: state.isSavingToPhotos(video) ? "arrow.down.circle" : (state.isDownloading(video) ? "xmark.circle.fill" : "arrow.down.circle.fill")
                                         )
                                         .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(TrackerActionButtonStyle(kind: state.isDownloading(video) ? .secondary : .primary))
+                                    .disabled(state.isSavingToPhotos(video))
                                 }
 
                                 Button {
@@ -742,6 +801,56 @@ private struct ManualVideoPickerView: View {
                     Button("Done") { dismiss() }
                         .foregroundStyle(TrackerPalette.accent)
                 }
+            }
+            .overlay(alignment: .bottom) {
+                Group {
+                    if let error = state.errorMessage {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(TrackerPalette.warning)
+                            Text(error)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(TrackerPalette.textPrimary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(TrackerPalette.surface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(TrackerPalette.warning.opacity(0.40), lineWidth: 0.5)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(color: Color.black.opacity(0.40), radius: 16, y: 6)
+                    } else if let message = state.toastMessage {
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(TrackerPalette.success)
+                            Text(message)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(TrackerPalette.textPrimary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(TrackerPalette.surface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(TrackerPalette.success.opacity(0.35), lineWidth: 0.5)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(color: Color.black.opacity(0.40), radius: 16, y: 6)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.errorMessage)
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.toastMessage)
+                .allowsHitTesting(false)
             }
             .sheet(item: $previewVideo) { video in
                 VideoPreviewView(video: video)
@@ -803,9 +912,9 @@ private struct TodayVideoRow: View {
                             showPreview = true
                         } label: {
                             HStack(spacing: 3) {
-                                Image(systemName: "play.fill")
+                                Image(systemName: video.isPhoto ? "photo" : "play.fill")
                                     .font(.system(size: 8))
-                                Text("Preview")
+                                Text(video.isPhoto ? "View" : "Preview")
                             }
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(TrackerPalette.accent)
@@ -823,7 +932,19 @@ private struct TodayVideoRow: View {
                 showPreview = true
             }
 
-            if isDownloading {
+            if state.isSavingToPhotos(video) {
+                VStack(spacing: 6) {
+                    Text("Saving to Photos…")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TrackerPalette.accent)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
+
+                    ProgressView()
+                        .tint(TrackerPalette.accent)
+                }
+                .padding(.vertical, 4)
+            } else if isDownloading {
                 VStack(spacing: 6) {
                     if let progress = state.downloads.progressByIdentity[video.identityKey] {
                         let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
@@ -917,7 +1038,14 @@ private struct TodayVideoRow: View {
 
     @ViewBuilder
     private var assignedActionButtons: some View {
-        if isDownloading {
+        if state.isSavingToPhotos(video) {
+            Button {} label: {
+                Label("Saving to Photos…", systemImage: "arrow.down.circle")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+            .disabled(true)
+        } else if isDownloading {
             Button {
                 state.cancelDownload(video)
             } label: {

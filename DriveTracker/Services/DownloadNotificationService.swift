@@ -43,7 +43,10 @@ final class DownloadNotificationService {
         let pending = assignments.filter {
             $0.isActive && $0.video?.status == .assigned && $0.account != nil
         }
-        let assignmentsByAccount = Dictionary(grouping: pending, by: { $0.account!.id })
+        let assignmentsByAccount = Dictionary(
+            grouping: pending,
+            by: { $0.account?.id ?? UUID() }
+        )
         let accounts = assignmentsByAccount
             .values
             .compactMap(\.first?.account)

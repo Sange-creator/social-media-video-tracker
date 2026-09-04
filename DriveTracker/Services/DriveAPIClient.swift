@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UIKit
 
 struct DriveCapabilities: Decodable, Sendable {
     let canDownload: Bool?
@@ -43,8 +44,33 @@ struct DriveItem: Decodable, Identifiable, Sendable {
         effectiveMimeType == Self.folderMimeType
     }
 
+    var isPhoto: Bool {
+        if effectiveMimeType.hasPrefix("image/") {
+            return true
+        }
+        let lower = name.lowercased()
+        return lower.hasSuffix(".jpg") ||
+            lower.hasSuffix(".jpeg") ||
+            lower.hasSuffix(".png") ||
+            lower.hasSuffix(".heic") ||
+            lower.hasSuffix(".heif") ||
+            lower.hasSuffix(".webp")
+    }
+
     var isVideo: Bool {
-        effectiveMimeType.hasPrefix("video/")
+        if effectiveMimeType.hasPrefix("video/") {
+            return true
+        }
+        let lower = name.lowercased()
+        return lower.hasSuffix(".mp4") ||
+            lower.hasSuffix(".mov") ||
+            lower.hasSuffix(".m4v") ||
+            lower.hasSuffix(".avi") ||
+            lower.hasSuffix(".mkv")
+    }
+
+    var isMedia: Bool {
+        isVideo || isPhoto
     }
 
     var isSpreadsheet: Bool {
@@ -85,19 +111,42 @@ struct DriveStartPageTokenResponse: Decodable, Sendable {
 enum DriveAPIError: LocalizedError {
     case invalidResponse
     case http(Int, String)
+    case unauthorized
+    case forbidden
+    case notFound
+    case rateLimited
+    case serverUnavailable(Int)
     case itemNotDownloadable
     case malformedURL
+    case networkUnavailable
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "Google Drive returned an invalid response."
+            return "Google Drive returned an invalid response."
+        case .unauthorized:
+            return "Google Drive authorization expired. Please reconnect your Google account."
+        case .forbidden:
+            return "You do not have permission to access this Google Drive item."
+        case .notFound:
+            return "The requested file or folder was not found in Google Drive."
+        case .rateLimited:
+            return "Google Drive is receiving too many requests. Please wait a moment."
+        case let .serverUnavailable(code):
+            return "Google Drive servers are temporarily unavailable (\(code)). Please try again shortly."
         case let .http(code, message):
-            "Google Drive error \(code): \(message)"
+            if code == 401 { return "Google Drive authorization expired. Please reconnect your Google account." }
+            if code == 403 { return "Permission denied. Check your Google Drive folder access." }
+            if code == 404 { return "The folder or video was not found in Google Drive." }
+            if code == 429 { return "Google Drive rate limit reached. Please wait a few seconds." }
+            if code >= 500 { return "Google Drive server error (\(code)). Please try again in a few moments." }
+            return "Google Drive error \(code): \(message)"
         case .itemNotDownloadable:
-            "Google Drive does not permit downloading this video."
+            return "Google Drive does not permit downloading this video."
         case .malformedURL:
-            "The Google Drive request could not be created."
+            return "The Google Drive request could not be created."
+        case .networkUnavailable:
+            return "Unable to connect to Google Drive. Check your internet connection."
         }
     }
 }
@@ -252,20 +301,73 @@ final class DriveAPIClient {
     }
 
     func thumbnailData(for item: VideoAsset) async throws -> Data {
-        guard let link = item.thumbnailLink else {
-            throw DriveAPIError.malformedURL
+        // Strategy 1: Attempt to load from item's stored thumbnailLink
+        if let link = item.thumbnailLink {
+            let scaledLink = link.replacingOccurrences(
+                of: "=s\\d+($|-[^?]+)",
+                with: "=s360$1",
+                options: .regularExpression
+            )
+            if let url = URL(string: scaledLink) {
+                // Google CDN (lh3.googleusercontent.com) often expects unauthenticated requests
+                if let (data, response) = try? await session.data(from: url),
+                   let http = response as? HTTPURLResponse,
+                   (200 ... 299).contains(http.statusCode),
+                   !data.isEmpty {
+                    return data
+                }
+                // Fallback to authorized request if unauthenticated was rejected
+                if let data = try? await data(for: authorizedRequest(url: url)), !data.isEmpty {
+                    return data
+                }
+            }
         }
-        let highResolutionLink = link.replacingOccurrences(
-            of: "=s\\d+($|-[^?]+)",
-            // Library cards are small; 320px is enough for a crisp preview
-            // while cutting thumbnail bandwidth and decode work substantially.
-            with: "=s320$1",
-            options: .regularExpression
+
+        // Strategy 2: Query Drive API for fresh thumbnail link if missing or expired
+        if let freshLink = try? await fetchFreshThumbnailLink(for: item.driveFileID, resourceKey: item.resourceKey) {
+            let scaledLink = freshLink.replacingOccurrences(
+                of: "=s\\d+($|-[^?]+)",
+                with: "=s360$1",
+                options: .regularExpression
+            )
+            if let url = URL(string: scaledLink) {
+                if let (data, response) = try? await session.data(from: url),
+                   let http = response as? HTTPURLResponse,
+                   (200 ... 299).contains(http.statusCode),
+                   !data.isEmpty {
+                    return data
+                }
+                if let data = try? await data(for: authorizedRequest(url: url)), !data.isEmpty {
+                    return data
+                }
+            }
+        }
+
+        // Strategy 3: Try Google Drive thumbnail endpoint directly
+        if let thumbURL = URL(string: "https://drive.google.com/thumbnail?id=\(item.driveFileID)&sz=w360") {
+            if let data = try? await data(for: authorizedRequest(url: thumbURL)), !data.isEmpty {
+                return data
+            }
+        }
+
+        throw DriveAPIError.invalidResponse
+    }
+
+    func fetchFreshThumbnailLink(for driveFileID: String, resourceKey: String? = nil) async throws -> String? {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(driveFileID)")
+        components?.queryItems = [
+            URLQueryItem(name: "fields", value: "thumbnailLink")
+        ]
+        guard let url = components?.url else { return nil }
+        let req = try await authorizedRequest(
+            url: url,
+            resourceKeys: resourceHeader(id: driveFileID, key: resourceKey)
         )
-        guard let url = URL(string: highResolutionLink) else {
-            throw DriveAPIError.malformedURL
+        let rawData = try await data(for: req)
+        struct FileThumbResponse: Decodable {
+            let thumbnailLink: String?
         }
-        return try await data(for: authorizedRequest(url: url))
+        return try? decoder.decode(FileThumbResponse.self, from: rawData).thumbnailLink
     }
 
     func exportSpreadsheetCSV(
@@ -319,11 +421,17 @@ final class DriveAPIClient {
             withJSONObject: ["name": name, "parents": ["appDataFolder"]]
         )
         var body = Data()
-        body.append("--\(boundary)\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8)!)
+        if let part1 = "--\(boundary)\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".data(using: .utf8) {
+            body.append(part1)
+        }
         body.append(metadata)
-        body.append("\r\n--\(boundary)\r\nContent-Type: application/json\r\n\r\n".data(using: .utf8)!)
+        if let part2 = "\r\n--\(boundary)\r\nContent-Type: application/json\r\n\r\n".data(using: .utf8) {
+            body.append(part2)
+        }
         body.append(data)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        if let part3 = "\r\n--\(boundary)--\r\n".data(using: .utf8) {
+            body.append(part3)
+        }
 
         var request = try await authorizedRequest(url: url)
         request.httpMethod = "POST"
@@ -481,18 +589,42 @@ final class DriveAPIClient {
     }
 
     private func data(for request: URLRequest, allowsEmpty: Bool = false) async throws -> Data {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw DriveAPIError.invalidResponse
+        var lastError: Error?
+        for attempt in 0 ..< 3 {
+            if attempt > 0 {
+                let delay = Double(attempt) * 0.75
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { throw CancellationError() }
+            }
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw DriveAPIError.invalidResponse
+                }
+                if (200 ... 299).contains(http.statusCode) {
+                    if data.isEmpty && !allowsEmpty {
+                        throw DriveAPIError.invalidResponse
+                    }
+                    return data
+                }
+                let message = String(data: data, encoding: .utf8) ?? "Unknown error"
+                if http.statusCode == 429 || (500 ... 599).contains(http.statusCode) {
+                    lastError = DriveAPIError.http(http.statusCode, message)
+                    continue
+                }
+                throw DriveAPIError.http(http.statusCode, message)
+            } catch let error as URLError {
+                if error.code == .cancelled { throw CancellationError() }
+                if error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
+                    lastError = DriveAPIError.networkUnavailable
+                } else {
+                    lastError = error
+                }
+            } catch {
+                throw error
+            }
         }
-        guard (200 ... 299).contains(http.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw DriveAPIError.http(http.statusCode, message)
-        }
-        if data.isEmpty && !allowsEmpty {
-            throw DriveAPIError.invalidResponse
-        }
-        return data
+        throw lastError ?? DriveAPIError.invalidResponse
     }
 
     private func resourceHeader(id: String, key: String?) -> String? {

@@ -302,7 +302,7 @@ struct VideoThumbnailView: View {
         self.width = width
         self.height = height
         self.cornerRadius = cornerRadius
-        _image = State(initialValue: ThumbnailService.shared.cachedImage(for: video.identityKey))
+        _image = State(initialValue: ThumbnailService.shared.memoryCachedImage(for: video.identityKey))
     }
 
     var body: some View {
@@ -314,24 +314,27 @@ struct VideoThumbnailView: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
+                    .transition(.opacity)
             } else {
-                Image(systemName: "film")
+                Image(systemName: video.isPhoto ? "photo" : "film")
                     .font(.title3.weight(.medium))
                     .foregroundStyle(TrackerPalette.muted)
             }
 
-            // Flat scrim keeps scrolling on the fast compositing path.
             Color.black.opacity(image == nil ? 0 : 0.18)
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: video.identityKey) {
             if image == nil {
-                image = await ThumbnailService.shared.thumbnailImage(
+                let loaded = await ThumbnailService.shared.thumbnailImage(
                     for: video,
                     api: state.api,
                     currentUserID: state.auth.userID
                 )
+                if let loaded {
+                    image = loaded
+                }
             }
         }
     }

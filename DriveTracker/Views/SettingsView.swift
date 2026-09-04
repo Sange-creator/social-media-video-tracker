@@ -454,11 +454,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             TrackerSectionLabel(
                 title: "Schedule & Reminders",
-                trailing: "US Timezones"
+                trailing: "TikTok Eligible Regions"
             )
 
             HStack {
-                Text("Default US Time Zone")
+                Text("Target Time Zone")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(TrackerPalette.textPrimary)
                 Spacer()
@@ -469,9 +469,13 @@ struct SettingsView: View {
                         set: { state.setReminderTimeZone($0, context: context) }
                     )
                 ) {
-                    ForEach(USReminderTimeZone.allCases) { zone in
-                        Text("\(zone.title) (\(zone.shortTitle))")
-                            .tag(zone.rawValue)
+                    ForEach(CreatorReminderTimeZone.groupedByRegion) { group in
+                        Section(header: Text("\(group.flag) \(group.name)")) {
+                            ForEach(group.zones) { zone in
+                                Text("\(zone.flag) \(zone.title) (\(zone.shortTitle))")
+                                    .tag(zone.rawValue)
+                            }
+                        }
                     }
                 }
                 .labelsHidden()

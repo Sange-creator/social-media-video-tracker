@@ -152,12 +152,12 @@ struct CopyQueueContent: View {
             return left.copiedAt == nil
         }
         if left.copiedAt == nil {
-            return left.sourceRow > right.sourceRow
+            return left.sourceRow < right.sourceRow
         }
         if left.copiedAt != right.copiedAt {
             return (left.copiedAt ?? .distantPast) > (right.copiedAt ?? .distantPast)
         }
-        return left.sourceRow > right.sourceRow
+        return left.sourceRow < right.sourceRow
     }
 }
 
@@ -181,8 +181,12 @@ struct CopyEntryCard: View {
                 )
                 Spacer()
                 Text("Row \(entry.sourceRow)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(TrackerPalette.muted)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(TrackerPalette.textPrimary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(TrackerPalette.raised)
+                    .clipShape(Capsule())
             }
 
             Text(entry.content)
@@ -197,12 +201,45 @@ struct CopyEntryCard: View {
                     .foregroundStyle(TrackerPalette.muted)
             }
 
+            if entry.parts.count >= 2 {
+                VStack(spacing: 8) {
+                    ForEach(Array(entry.parts.enumerated()), id: \.offset) { index, part in
+                        let isHashtagPart = part.contains("#")
+                        let partLabel = isHashtagPart ? "Copy Hashtags" : (index == 0 ? "Copy Title / Caption" : "Copy Part \(index + 1)")
+                        Button {
+                            state.copyCustomTextToClipboard(part, for: entry, label: partLabel, context: context)
+                        } label: {
+                            HStack {
+                                Image(systemName: isHashtagPart ? "number" : "doc.on.clipboard")
+                                Text(partLabel)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(part)
+                                    .font(.caption2)
+                                    .foregroundStyle(TrackerPalette.muted)
+                                    .lineLimit(1)
+                            }
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(TrackerPalette.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(TrackerPalette.line, lineWidth: 0.5)
+                            }
+                        }
+                        .buttonStyle(TrackerPressButtonStyle())
+                    }
+                }
+            }
+
             HStack(spacing: 10) {
                 Button {
                     state.copyToClipboard(entry, context: context)
                 } label: {
                     Label(
-                        entry.copiedAt == nil ? "Copy" : "Copy Again",
+                        entry.copiedAt == nil ? (entry.parts.count >= 2 ? "Copy Full Row" : "Copy to Clipboard") : "Copy Again",
                         systemImage: "doc.on.doc"
                     )
                     .frame(maxWidth: .infinity)
@@ -257,7 +294,7 @@ struct GlobalCopyQueueCard: View {
     private var nextEntry: CopyEntry? {
         activeEntries
             .filter { $0.copiedAt == nil }
-            .max { $0.sourceRow < $1.sourceRow }
+            .min { $0.sourceRow < $1.sourceRow }
     }
 
     private var activeEntries: [CopyEntry] {
@@ -276,7 +313,7 @@ struct GlobalCopyQueueCard: View {
 
             if !state.hasGlobalCopyQueueSheet && !isEditingLink {
                 HStack(spacing: 12) {
-                    Image(systemName: "doc.text.badge.plus")
+                    Image(systemName: "doc.badge.plus")
                         .font(.title3)
                         .foregroundStyle(TrackerPalette.accent)
                         .frame(width: 36, height: 36)
@@ -345,11 +382,17 @@ struct GlobalCopyQueueCard: View {
             }
 
             if state.hasGlobalCopyQueueSheet {
+                let uncopiedCount = activeEntries.filter { $0.copiedAt == nil }.count
                 Button {
                     showQueue = true
                 } label: {
-                    Label("Open full copy queue", systemImage: "list.clipboard")
-                        .frame(maxWidth: .infinity)
+                    Label(
+                        uncopiedCount > 0
+                            ? "Open full copy queue (\(uncopiedCount) ready)"
+                            : "Open full copy queue (\(activeEntries.count) rows)",
+                        systemImage: "list.clipboard"
+                    )
+                    .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
             }

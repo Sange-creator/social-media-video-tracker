@@ -221,16 +221,24 @@ struct AccountEditorView: View {
     @State private var draftAutoComplete: Bool = true
     @State private var draftStrictChecksum: Bool = true
     @State private var confirmDelete = false
+    @State private var isDeleting = false
 
     private var trackedFolderPaths: [String] {
-        Array(Set(account.videos.map(\.folderPath).filter { !$0.isEmpty }))
+        guard !isDeleting else { return [] }
+        return Array(Set(account.videos.map(\.folderPath).filter { !$0.isEmpty }))
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     var body: some View {
         Form {
-            Section {
-                HStack(spacing: 14) {
+            if isDeleting {
+                Section {
+                    Text("Removing account…")
+                        .foregroundStyle(TrackerPalette.muted)
+                }
+            } else {
+                Section {
+                    HStack(spacing: 14) {
                     AccountIdentityIcon(
                         symbol: draftIconSymbol,
                         colorHex: draftIconColor,
@@ -274,8 +282,12 @@ struct AccountEditorView: View {
             Section {
                 Picker("Target time zone", selection: $draftTimeZoneID) {
                     Text("App default (\(state.reminderTimeZoneID.split(separator: "/").last ?? "ET"))").tag("")
-                    ForEach(USReminderTimeZone.allCases) { zone in
-                        Text("\(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
+                    ForEach(CreatorReminderTimeZone.groupedByRegion) { group in
+                        Section(header: Text("\(group.flag) \(group.name)")) {
+                            ForEach(group.zones) { zone in
+                                Text("\(zone.flag) \(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
+                            }
+                        }
                     }
                 }
 
@@ -385,9 +397,10 @@ struct AccountEditorView: View {
             } footer: {
                 Text("This removes the account, its suggestions, and local tracking history. It never deletes folders or videos from Google Drive.")
             }
+            }
         }
         .trackerListStyle()
-        .navigationTitle(account.displayName)
+        .navigationTitle(draftHandle.isEmpty ? account.displayName : draftHandle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -425,8 +438,12 @@ struct AccountEditorView: View {
             titleVisibility: .visible
         ) {
             Button("Delete account", role: .destructive) {
-                state.deleteAccount(account, context: context)
+                let targetID = account.id
+                isDeleting = true
                 dismiss()
+                Task { @MainActor in
+                    state.deleteAccount(accountID: targetID, context: context)
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
