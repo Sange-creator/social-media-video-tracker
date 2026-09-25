@@ -13,15 +13,10 @@ struct SettingsView: View {
     @State private var confirmVideoBackup = false
     @State private var confirmRestore = false
     @State private var confirmDisconnect = false
-    @State private var showFolderBrowser = false
+    @State private var showAddAccount = false
     @State private var pendingFolder: DriveFolderChoice?
     @State private var pendingFolderLink: String?
     @State private var isResolvingLink = false
-    // Retained only for the legacy queue migration tools. The global queue is
-    // no longer presented in the everyday Settings interface.
-    @State private var isConnectingQueue = false
-    @State private var queueLinkDraft = ""
-    @FocusState private var isQueueLinkFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -90,14 +85,11 @@ struct SettingsView: View {
         } message: {
             Text("Local tracking history remains on this iPhone.")
         }
-        .sheet(isPresented: $showFolderBrowser) {
-            DriveFolderBrowserView { folder in
+        .sheet(isPresented: $showAddAccount) {
+            AddAccountFlowView(initialFolder: pendingFolder, initialLink: pendingFolderLink) {
+                pendingFolder = nil
                 pendingFolderLink = nil
-                pendingFolder = folder
             }
-        }
-        .sheet(item: $pendingFolder) { folder in
-            FolderAssociationView(folder: folder, originalLink: pendingFolderLink)
         }
     }
 
@@ -269,7 +261,9 @@ struct SettingsView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    showFolderBrowser = true
+                    pendingFolder = nil
+                    pendingFolderLink = nil
+                    showAddAccount = true
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "folder.badge.plus")
@@ -347,6 +341,7 @@ struct SettingsView: View {
                         do {
                             pendingFolder = try await state.folderChoice(from: folderLink)
                             pendingFolderLink = folderLink
+                            showAddAccount = true
                         } catch {
                             state.errorMessage = error.localizedDescription
                         }
@@ -388,86 +383,6 @@ struct SettingsView: View {
                         .foregroundStyle(TrackerPalette.muted)
                 }
             }
-        }
-        .trackerCard(padding: 16)
-    }
-
-    private var copyQueueSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            TrackerSectionLabel(
-                title: "Global Copy Queue",
-                trailing: state.hasGlobalCopyQueueSheet ? "Connected" : "Not Linked"
-            )
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Google Sheet URL")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(TrackerPalette.muted)
-
-                TextField("https://docs.google.com/spreadsheets/d/...", text: $queueLinkDraft, axis: .vertical)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .font(.footnote.monospaced())
-                    .lineLimit(2 ... 4)
-                    .padding(10)
-                    .background(TrackerPalette.raised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(TrackerPalette.line, lineWidth: 1)
-                    }
-                    .focused($isQueueLinkFocused)
-
-                HStack(spacing: 10) {
-                    Button {
-                        pasteQueueLink()
-                    } label: {
-                        Label("Paste Link", systemImage: "doc.on.clipboard")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(TrackerPalette.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(TrackerPalette.accent.opacity(0.12), in: Capsule())
-                    }
-                    .buttonStyle(TrackerPressButtonStyle())
-
-                    Spacer()
-
-                    Button {
-                        saveQueueLink()
-                    } label: {
-                        HStack(spacing: 5) {
-                            if isConnectingQueue {
-                                ProgressView()
-                                    .tint(Color(hex: "#090A0F"))
-                                    .scaleEffect(0.7)
-                            }
-                            Text(isConnectingQueue ? "Connecting..." : state.hasGlobalCopyQueueSheet ? "Save Changes" : "Connect Sheet")
-                        }
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color(hex: "#090A0F"))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(TrackerPalette.accent, in: Capsule())
-                    }
-                    .buttonStyle(TrackerPressButtonStyle())
-                    .disabled(!auth.isSignedIn || isConnectingQueue || queueLinkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-
-            if state.hasGlobalCopyQueueSheet && !hasUnsavedQueueLink {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(TrackerPalette.success)
-                    Text("Google Sheet successfully synced with 1-tap queue.")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(TrackerPalette.success)
-                }
-            }
-
-            Text("Put one complete title and hashtag block in each row of column A. The app automatically fetches new captions during every Drive sync.")
-                .font(.caption2)
-                .foregroundStyle(TrackerPalette.muted)
         }
         .trackerCard(padding: 16)
     }
@@ -673,51 +588,6 @@ struct SettingsView: View {
                 .foregroundStyle(TrackerPalette.muted)
         }
         .trackerCard(padding: 16)
-    }
-
-    private func saveQueueLink() {
-        guard !isConnectingQueue else { return }
-        dismissQueueKeyboard()
-        isConnectingQueue = true
-        Task {
-            let connected = await state.connectGlobalCopyQueue(
-                link: queueLinkDraft,
-                context: context
-            )
-            if connected {
-                queueLinkDraft = state.globalCopyQueueLink
-            }
-            isConnectingQueue = false
-            dismissQueueKeyboard()
-        }
-    }
-
-    private func pasteQueueLink() {
-        guard let pastedLink = UIPasteboard.general.string?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !pastedLink.isEmpty
-        else {
-            state.errorMessage = "Copy a Google Sheet link first, then tap Paste Link."
-            return
-        }
-
-        queueLinkDraft = pastedLink
-        dismissQueueKeyboard()
-    }
-
-    private var hasUnsavedQueueLink: Bool {
-        queueLinkDraft.trimmingCharacters(in: .whitespacesAndNewlines) !=
-            state.globalCopyQueueLink
-    }
-
-    private func dismissQueueKeyboard() {
-        isQueueLinkFocused = false
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil
-        )
     }
 }
 

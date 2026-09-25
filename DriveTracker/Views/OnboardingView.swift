@@ -8,7 +8,7 @@ struct OnboardingView: View {
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
     @Query(sort: \DriveSource.createdAt) private var sources: [DriveSource]
     @State private var folderLink = ""
-    @State private var showFolderBrowser = false
+    @State private var showAddAccount = false
     @State private var pendingFolder: DriveFolderChoice?
     @State private var pendingFolderLink: String?
     @State private var isResolvingLink = false
@@ -53,14 +53,11 @@ struct OnboardingView: View {
             }
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
-            .sheet(isPresented: $showFolderBrowser) {
-                DriveFolderBrowserView { folder in
+            .sheet(isPresented: $showAddAccount) {
+                AddAccountFlowView(initialFolder: pendingFolder, initialLink: pendingFolderLink) {
+                    pendingFolder = nil
                     pendingFolderLink = nil
-                    pendingFolder = folder
                 }
-            }
-            .sheet(item: $pendingFolder) { folder in
-                FolderAssociationView(folder: folder, originalLink: pendingFolderLink)
             }
         }
         .onAppear {
@@ -273,7 +270,9 @@ struct OnboardingView: View {
                 .foregroundStyle(TrackerPalette.muted)
 
             Button {
-                showFolderBrowser = true
+                pendingFolder = nil
+                pendingFolderLink = nil
+                showAddAccount = true
             } label: {
                 Label("Browse Drive and shared folders", systemImage: "folder")
                     .frame(maxWidth: .infinity)
@@ -300,6 +299,7 @@ struct OnboardingView: View {
                     do {
                         pendingFolder = try await state.folderChoice(from: folderLink)
                         pendingFolderLink = folderLink
+                        showAddAccount = true
                     } catch {
                         state.errorMessage = error.localizedDescription
                     }
@@ -718,8 +718,11 @@ struct FolderAssociationView: View {
                 }
             }
             .onAppear {
+                if accountName.isEmpty {
+                    accountName = folder.name
+                }
                 folderName = folder.name
-                let style = AccountIconCatalog.style(for: accounts.count)
+                let style = AccountIconCatalog.style(forName: accountName, fallbackID: selectedAccountID ?? UUID())
                 draftIconSymbol = style.symbol
                 draftIconColor = style.colorHex
             }

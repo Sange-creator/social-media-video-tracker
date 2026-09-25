@@ -3,8 +3,7 @@ import SwiftUI
 
 struct AccountsView: View {
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
-    @State private var showFolderBrowser = false
-    @State private var pendingFolder: DriveFolderChoice?
+    @State private var showAddAccountFlow = false
 
     private var activeCount: Int {
         accounts.filter { $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }.count
@@ -51,13 +50,8 @@ struct AccountsView: View {
             .trackerScreen()
             .toolbar(.hidden, for: .navigationBar)
         }
-        .sheet(isPresented: $showFolderBrowser) {
-            DriveFolderBrowserView { folder in
-                pendingFolder = folder
-            }
-        }
-        .sheet(item: $pendingFolder) { folder in
-            FolderAssociationView(folder: folder, originalLink: nil)
+        .sheet(isPresented: $showAddAccountFlow) {
+            AddAccountFlowView()
         }
     }
 
@@ -76,7 +70,7 @@ struct AccountsView: View {
             Spacer()
 
             Button {
-                showFolderBrowser = true
+                showAddAccountFlow = true
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "plus")
@@ -460,10 +454,13 @@ struct AccountEditorView: View {
     }
 
     private func save() {
-        account.displayName = draftHandle
+        let cleanName = draftHandle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanName.isEmpty else { return }
+
+        account.displayName = cleanName
         account.dailyQuota = draftQuota
         account.isPaused = draftPaused
-        let style = AccountIconCatalog.style(forName: draftHandle, fallbackID: account.id)
+        let style = AccountIconCatalog.style(forName: cleanName, fallbackID: account.id)
         account.iconSymbol = style.symbol
         account.iconColorHex = style.colorHex
         account.targetTimeZoneID = draftTimeZoneID.isEmpty ? nil : draftTimeZoneID
@@ -477,9 +474,9 @@ struct AccountEditorView: View {
         account.strictChecksum = draftStrictChecksum
 
         state.accountChanged(account, context: context)
-        if account.isConfigured, isSetupFlow {
-            dismiss()
-        }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        state.toastMessage = "Saved \(cleanName)"
+        dismiss()
     }
 }
 

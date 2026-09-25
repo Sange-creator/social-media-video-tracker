@@ -29,7 +29,6 @@ struct TodayView: View {
                 LazyVStack(spacing: 14) {
                     customTopHeader
                     todayDashboardHeader(completed: totalCompleted, quota: totalQuota)
-                    GlobalCopyQueueCard()
 
                     HStack {
                         TrackerSectionLabel(
