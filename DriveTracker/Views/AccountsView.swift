@@ -126,6 +126,8 @@ private struct AccountRow: View {
     }
 
     var body: some View {
+        let completed = completedToday
+        let progress = account.dailyQuota > 0 ? Double(completed) / Double(account.dailyQuota) : 0
         VStack(spacing: 14) {
             HStack(spacing: 12) {
                 AccountIdentityIcon(
@@ -171,13 +173,13 @@ private struct AccountRow: View {
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(TrackerPalette.muted)
                     Spacer()
-                    Text("\(completedToday) of \(account.dailyQuota) done")
+                    Text("\(completed) of \(account.dailyQuota) done")
                         .font(.caption2.monospacedDigit().weight(.bold))
-                        .foregroundStyle(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
+                        .foregroundStyle(completed >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
                 }
 
-                ProgressView(value: min(max(quotaProgress, 0), 1))
-                    .tint(completedToday >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
+                ProgressView(value: min(max(progress, 0), 1))
+                    .tint(completed >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
                     .background(TrackerPalette.raised, in: Capsule())
                     .frame(height: 5)
             }

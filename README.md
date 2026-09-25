@@ -24,7 +24,7 @@ The app connects only to the Drive folders you select. Each folder can be associ
 4. Let the app create a daily set of unused suggestions, or choose a different unused video manually.
 5. Tap a video to stream a preview directly from Drive.
 6. Download the original file to Photos. The tracker marks it completed only after the save succeeds.
-7. Paste titles and hashtags into the shared Google Sheet and copy them from the app.
+7. Attach one complete title, caption, and hashtag block to each Drive file in the hosted dashboard, then copy it from that file on iPhone.
 8. Review daily, per-account, and all-time activity in Analytics.
 
 Suggestions that are not completed can carry forward. Completed videos remain in history and are excluded from future suggestions, even when a Drive filename changes.
@@ -70,20 +70,14 @@ Suggestions that are not completed can carry forward. Completed videos remain in
 - Records immutable history events for downloads, replacements, corrections, and resets.
 - Provides a direct Library download button for unused videos without replacing Today suggestions.
 
-### Title and hashtag copy queue
+### Per-file upload text
 
-- Uses one global Google Sheet per Google login across the managed accounts
-  available to that login.
-- Connects the global queue by its Google Sheet link, so the Sheet can live
-  anywhere the signed-in Google account can access.
-- Keeps the last validated Sheet active while a replacement URL is being edited.
-- Stores a separate Sheet connection for each Google login used on the device.
-- Treats Column A as the exact title-and-hashtag text to copy.
-- Shows the newest uncopied row first and refreshes while the queue is open.
-- Preserves commas, quotation marks, emojis, hashtags, Unicode, and multiline cells.
-- Tracks Copy, Copy Again, Mark Uncopied, content changes, and removed Drive entries.
-- Keeps copied history on-device and includes it in the metadata backup.
-- Shows the next uncopied entry and the full global queue from Today.
+- Stores one complete text block against the video's stable Drive file ID.
+- Preserves line breaks, commas, quotation marks, emojis, hashtags, and Unicode.
+- Keeps the text attached when a Drive file is renamed or moved.
+- Provides Save and Copy text beside the matching video's download controls.
+- Synchronizes configured workspaces through the hosted dashboard and cloud API.
+- Preserves text from the retired Google Sheet queue in a read-only Settings archive.
 
 ### Analytics
 
@@ -284,23 +278,16 @@ A free Apple Personal Team can install the app on a personal iPhone, but the pro
 
 Repeat the connection process when another folder belongs to a different Google account.
 
-## Copy queue setup
+## Connected dashboard setup
 
-Create one Google Sheet anywhere in Google Drive. It does not need to be
-inside an account's tracked video folder.
+The `dashboard/` project provides the computer workflow. Configure its
+Supabase and Google OAuth environment values, deploy it to Cloudflare, and add
+the resulting URLs and public Supabase values to `DriveTracker/Info.plist`.
+Select a Drive destination, choose a video or photo, paste the complete upload
+paragraph once, and upload. The iPhone app matches the text by Drive file ID.
 
-In the queue Sheet:
-
-1. Optionally put `Content` in cell A1.
-2. Paste one complete title-and-hashtag block into each cell in Column A.
-3. Keep adding new entries downward; the app treats the highest occupied row number as newest.
-4. Copy the Sheet's sharing URL.
-5. Paste the URL from **Today → Global Copy Queue** or
-   **Settings → Global Copy Queue**, then connect it.
-6. Tap **Copy**. The exact cell content is placed on the iPhone clipboard and recorded as copied.
-
-The connected Google account must have permission to view the Sheet. The app
-cannot detect whether clipboard text is later pasted into another application.
+Existing entries from the retired Google Sheet queue remain available as a
+read-only Clipboard Archive in Settings.
 
 ## Tests
 

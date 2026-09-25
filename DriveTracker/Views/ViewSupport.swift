@@ -2,18 +2,30 @@ import SwiftUI
 import UIKit
 
 enum TrackerPalette {
-    static let canvas = Color(red: 9/255, green: 10/255, blue: 15/255)
-    static let surface = Color(red: 19/255, green: 22/255, blue: 34/255)
-    static let raised = Color(red: 26/255, green: 30/255, blue: 44/255)
-    static let elevated = Color(red: 34/255, green: 39/255, blue: 57/255)
-    static let line = Color(white: 1.0).opacity(0.08)
-    static let cardBorder = Color(white: 1.0).opacity(0.10)
-    static let muted = Color(red: 148/255, green: 163/255, blue: 184/255)
-    static let textPrimary = Color(red: 248/255, green: 250/255, blue: 252/255)
-    static let accent = Color(red: 56/255, green: 189/255, blue: 248/255)
-    static let success = Color(red: 52/255, green: 211/255, blue: 153/255)
-    static let warning = Color(red: 251/255, green: 191/255, blue: 36/255)
-    static let danger = Color(red: 248/255, green: 113/255, blue: 113/255)
+    static let canvas = adaptive(light: 0xF6F7F9, dark: 0x101319)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x181C24)
+    static let raised = adaptive(light: 0xF0F2F5, dark: 0x222833)
+    static let elevated = adaptive(light: 0xE6EAF0, dark: 0x2B3240)
+    static let line = adaptive(light: 0xDDE2EA, dark: 0x343C4A)
+    static let cardBorder = adaptive(light: 0xD6DCE5, dark: 0x3B4453)
+    static let muted = adaptive(light: 0x667085, dark: 0xA0A9BA)
+    static let textPrimary = adaptive(light: 0x151923, dark: 0xF4F6FA)
+    static let accent = adaptive(light: 0x1D4ED8, dark: 0x6F97F5)
+    static let success = adaptive(light: 0x15803D, dark: 0x4ADE80)
+    static let warning = adaptive(light: 0xB45309, dark: 0xFBBF24)
+    static let danger = adaptive(light: 0xC52828, dark: 0xFB7185)
+
+    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+        Color(uiColor: UIColor { traits in
+            let value = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat((value >> 16) & 0xFF) / 255,
+                green: CGFloat((value >> 8) & 0xFF) / 255,
+                blue: CGFloat(value & 0xFF) / 255,
+                alpha: 1
+            )
+        })
+    }
 }
 
 struct RadialQuotaProgress: View {
@@ -65,17 +77,18 @@ struct StatusPill: View {
 
     var body: some View {
         let tint = status.tint
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             Circle()
                 .fill(tint)
-                .frame(width: 5, height: 5)
+                .frame(width: 4.5, height: 4.5)
             Text(status.title.capitalized)
-                .font(.system(size: 9.5, weight: .bold))
+                .font(.system(size: 9, weight: .bold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
         .foregroundStyle(tint)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2.5)
         .background(tint.opacity(0.14), in: Capsule())
         .overlay {
             Capsule().stroke(tint.opacity(0.25), lineWidth: 0.5)
@@ -153,19 +166,22 @@ struct TrackerActionButtonStyle: ButtonStyle {
     }
 
     let kind: Kind
+    var compact: Bool = false
+    var fullWidth: Bool? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.subheadline.weight(.semibold))
+            .font(compact ? .caption.weight(.bold) : .subheadline.weight(.semibold))
             .foregroundStyle(foreground)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
+            .padding(.horizontal, compact ? 10 : 14)
+            .frame(maxWidth: (fullWidth ?? !compact) ? .infinity : nil, alignment: .center)
+            .frame(minHeight: compact ? 34 : 44)
             .background(background.opacity(configuration.isPressed ? 0.82 : 1))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: compact ? 8 : 12, style: .continuous)
                     .stroke(border, lineWidth: 0.5)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: compact ? 8 : 12, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .sensoryFeedback(
@@ -327,12 +343,15 @@ struct VideoThumbnailView: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .task(id: video.identityKey) {
             if image == nil {
+                // Scroll-aware gate: cancel immediately during fast flings to keep 60fps scrolling
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled else { return }
                 let loaded = await ThumbnailService.shared.thumbnailImage(
                     for: video,
                     api: state.api,
                     currentUserID: state.auth.userID
                 )
-                if let loaded {
+                if let loaded, !Task.isCancelled {
                     image = loaded
                 }
             }

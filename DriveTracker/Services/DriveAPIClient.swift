@@ -163,9 +163,18 @@ final class DriveAPIClient {
     private let session: URLSession
     private let decoder = JSONDecoder()
 
-    init(auth: GoogleAuthService, session: URLSession = .shared) {
+    private static func makeDefaultSession() -> URLSession {
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 300
+        return URLSession(configuration: config)
+    }
+
+    init(auth: GoogleAuthService, session: URLSession? = nil) {
         self.auth = auth
-        self.session = session
+        self.session = session ?? Self.makeDefaultSession()
     }
 
     func item(id: String, resourceKey: String? = nil) async throws -> DriveItem {
@@ -581,7 +590,10 @@ final class DriveAPIClient {
     private func authorizedRequest(url: URL, resourceKeys: String? = nil) async throws -> URLRequest {
         let token = try await auth.accessToken()
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("no-cache, no-store, max-age=0", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         if let resourceKeys {
             request.setValue(resourceKeys, forHTTPHeaderField: "X-Goog-Drive-Resource-Keys")
         }

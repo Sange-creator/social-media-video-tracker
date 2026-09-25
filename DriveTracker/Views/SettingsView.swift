@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var pendingFolder: DriveFolderChoice?
     @State private var pendingFolderLink: String?
     @State private var isResolvingLink = false
+    // Retained only for the legacy queue migration tools. The global queue is
+    // no longer presented in the everyday Settings interface.
     @State private var isConnectingQueue = false
     @State private var queueLinkDraft = ""
     @FocusState private var isQueueLinkFocused: Bool
@@ -28,7 +30,7 @@ struct SettingsView: View {
                     customTopHeader
                     googleSection
                     driveSection
-                    copyQueueSection
+                    legacyClipboardArchiveSection
                     notificationSection
                     backupSection
                     privacySection
@@ -42,14 +44,7 @@ struct SettingsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
                 folderLink = state.rootLink
-                queueLinkDraft = state.globalCopyQueueLink
             }
-            .onChange(of: state.globalCopyQueueLink) { _, newValue in
-                if !isQueueLinkFocused, !isConnectingQueue {
-                    queueLinkDraft = newValue
-                }
-            }
-            .onDisappear { dismissQueueKeyboard() }
         }
         .confirmationDialog("Delete all local tracking data?", isPresented: $confirmDeleteLocal) {
             Button("Delete local data", role: .destructive) {
@@ -104,6 +99,33 @@ struct SettingsView: View {
         .sheet(item: $pendingFolder) { folder in
             FolderAssociationView(folder: folder, originalLink: pendingFolderLink)
         }
+    }
+
+    private var legacyClipboardArchiveSection: some View {
+        NavigationLink {
+            LegacyCopyArchiveView()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "archivebox")
+                    .foregroundStyle(TrackerPalette.accent)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Clipboard Archive")
+                        .font(.headline)
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                    Text("Read-only text preserved from the retired Global Copy Queue")
+                        .font(.caption)
+                        .foregroundStyle(TrackerPalette.muted)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TrackerPalette.muted)
+            }
+            .trackerCard(padding: 16)
+        }
+        .buttonStyle(.plain)
     }
 
     private var customTopHeader: some View {

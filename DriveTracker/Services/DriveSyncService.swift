@@ -59,7 +59,7 @@ final class DriveSyncService {
             try Task.checkCancellation()
             // Large folders should never monopolize the main actor while the
             // user is scrolling or changing tabs.
-            if index > 0, index.isMultiple(of: 40) {
+            if index > 0, index.isMultiple(of: 20) {
                 await Task.yield()
             }
             let item = located.item

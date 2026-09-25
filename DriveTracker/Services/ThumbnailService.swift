@@ -8,13 +8,13 @@ final class ThumbnailService {
     static let shared = ThumbnailService()
 
     private let memoryCache = NSCache<NSString, UIImage>()
-    private var inFlightTasks: [String: Task<UIImage?, Never>] = [:]
     private let diskCacheDirectory: URL
+    private var inFlightTasks: [String: Task<UIImage?, Never>] = [:]
 
     // Concurrency control: Limit concurrent thumbnail network/decode operations to 4
     private let maxConcurrentFetches = 4
     private var activeFetchCount = 0
-    private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
+    private var fetchWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Never>)] = []
 
     private init() {
         memoryCache.countLimit = 400
@@ -34,7 +34,7 @@ final class ThumbnailService {
         return diskCacheDirectory.appendingPathComponent("\(hash).jpg")
     }
 
-    /// Instant synchronous O(1) in-memory cache lookup. Guaranteed 0 disk I/O for 60fps scrolling.
+    /// Instant synchronous O(1) in-memory cache lookup. Guaranteed 0 disk I/O for 60/120fps scrolling.
     func memoryCachedImage(for identityKey: String) -> UIImage? {
         let key = identityKey as NSString
         return memoryCache.object(forKey: key)
@@ -55,16 +55,27 @@ final class ThumbnailService {
         let identity = video.identityKey
         let cacheKey = identity as NSString
 
-        // 1. Check in-memory cache (instant)
+        // 1. Check in-memory cache (instant synchronous lookup, guaranteed 0 disk I/O)
         if let cached = memoryCache.object(forKey: cacheKey) {
             return cached
         }
 
-        // 2. Check on-disk persistent cache asynchronously off the main actor
+        // 2. Deduplicate in-flight loading tasks for this identity
+        if let existingTask = inFlightTasks[identity] {
+            return await existingTask.value
+        }
+
         let fileURL = diskFileURL(for: identity)
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            let diskCached = await Task.detached(priority: .userInitiated) { () -> (UIImage, Int)? in
-                guard let data = try? Data(contentsOf: fileURL),
+        let isMissing = video.isMissingFromDrive
+        let matchesUser = (currentUserID == video.googleUserID)
+
+        let task = Task<UIImage?, Never> { [weak self] in
+            guard let self else { return nil }
+
+            // A. Check on-disk persistent cache asynchronously off the main thread
+            let diskCached = await Task.detached(priority: .utility) { () -> (UIImage, Int)? in
+                guard FileManager.default.fileExists(atPath: fileURL.path),
+                      let data = try? Data(contentsOf: fileURL),
                       let source = CGImageSourceCreateWithData(data as CFData, nil),
                       let cgImage = CGImageSourceCreateThumbnailAtIndex(
                           source,
@@ -72,7 +83,7 @@ final class ThumbnailService {
                           [
                               kCGImageSourceCreateThumbnailFromImageAlways: true,
                               kCGImageSourceCreateThumbnailWithTransform: true,
-                              kCGImageSourceThumbnailMaxPixelSize: 480
+                              kCGImageSourceThumbnailMaxPixelSize: 320
                           ] as CFDictionary
                       )
                 else { return nil }
@@ -82,31 +93,18 @@ final class ThumbnailService {
             }.value
 
             if let (image, cost) = diskCached {
-                memoryCache.setObject(image, forKey: cacheKey, cost: cost)
+                self.memoryCache.setObject(image, forKey: cacheKey, cost: cost)
                 return image
             }
-        }
 
-        // 3. Check for an already in-flight task for this video
-        if let existingTask = inFlightTasks[identity] {
-            return await existingTask.value
-        }
+            guard let api, matchesUser, !isMissing else {
+                return nil
+            }
 
-        guard let api,
-              currentUserID == video.googleUserID,
-              !video.isMissingFromDrive
-        else {
-            return nil
-        }
-
-        // 4. Fetch from Google Drive with concurrency gate & background decoding
-        let task = Task<UIImage?, Never> { [weak self] in
-            guard let self else { return nil }
+            // B. Fetch from Google Drive with concurrency gate & background decoding
             await self.acquireFetchSlot()
             defer {
-                Task { @MainActor [weak self] in
-                    self?.releaseFetchSlot()
-                }
+                self.releaseFetchSlot()
             }
 
             guard !Task.isCancelled,
@@ -115,8 +113,8 @@ final class ThumbnailService {
                 return nil
             }
 
-            // Decode and downscale image off the main actor
-            let decodedResult = await Task.detached(priority: .userInitiated) { () -> (UIImage, Data)? in
+            // Decode and downscale image off the main thread
+            let decodedResult = await Task.detached(priority: .utility) { () -> (UIImage, Data)? in
                 guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                       let cgImage = CGImageSourceCreateThumbnailAtIndex(
                           source,
@@ -124,7 +122,7 @@ final class ThumbnailService {
                           [
                               kCGImageSourceCreateThumbnailFromImageAlways: true,
                               kCGImageSourceCreateThumbnailWithTransform: true,
-                              kCGImageSourceThumbnailMaxPixelSize: 480
+                              kCGImageSourceThumbnailMaxPixelSize: 320
                           ] as CFDictionary
                       )
                 else {
@@ -141,9 +139,8 @@ final class ThumbnailService {
             guard let (decodedImage, jpegData) = decodedResult else { return nil }
 
             // Write to disk cache asynchronously
-            let targetDiskURL = self.diskFileURL(for: identity)
             Task.detached(priority: .background) {
-                try? jpegData.write(to: targetDiskURL, options: .atomic)
+                try? jpegData.write(to: fileURL, options: .atomic)
             }
 
             let imageCost = decodedImage.cgImage.map {
@@ -166,21 +163,29 @@ final class ThumbnailService {
             activeFetchCount += 1
             return
         }
+        let waiterID = UUID()
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
-                fetchWaiters.append(continuation)
+                fetchWaiters.append((id: waiterID, continuation: continuation))
             }
         } onCancel: {
             Task { @MainActor [weak self] in
-                self?.releaseFetchSlot()
+                self?.cancelWaiter(id: waiterID)
             }
+        }
+    }
+
+    private func cancelWaiter(id: UUID) {
+        if let index = fetchWaiters.firstIndex(where: { $0.id == id }) {
+            let waiter = fetchWaiters.remove(at: index)
+            waiter.continuation.resume()
         }
     }
 
     private func releaseFetchSlot() {
         if !fetchWaiters.isEmpty {
             let next = fetchWaiters.removeFirst()
-            next.resume()
+            next.continuation.resume()
         } else {
             activeFetchCount = max(0, activeFetchCount - 1)
         }

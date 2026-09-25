@@ -18,6 +18,24 @@ enum CopyQueueFilter: String, CaseIterable, Identifiable {
     }
 }
 
+struct CopyQueueScreen: View {
+    @State private var search = ""
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                CopyQueueContent(search: $search)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 120)
+            }
+            .trackerScreen()
+            .navigationTitle("Clipboard Queue")
+            .searchable(text: $search, prompt: "Search captions & hashtags…")
+        }
+    }
+}
+
 struct CopyQueueContent: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
@@ -60,7 +78,14 @@ struct CopyQueueContent: View {
             overview
 
             if let issue = state.globalCopyQueueIssue {
-                CopyQueueSetupCard(message: issue)
+                Label(
+                    "Saved rows are available. Retrying automatically: \(issue)",
+                    systemImage: "arrow.clockwise.icloud"
+                )
+                .font(.caption)
+                .foregroundStyle(TrackerPalette.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .trackerCard()
             }
 
             HStack {
@@ -165,86 +190,75 @@ struct CopyEntryCard: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let entry: CopyEntry
+    @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label(
-                    entry.copiedAt == nil ? "Ready to copy" : "Copied",
-                    systemImage: entry.copiedAt == nil
-                        ? "doc.on.clipboard"
-                        : "checkmark.circle.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(
-                    entry.copiedAt == nil ? TrackerPalette.warning : TrackerPalette.success
-                )
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.clipboard.fill")
+                        .font(.caption)
+                        .foregroundStyle(TrackerPalette.accent)
+                    Text("Row \(entry.sourceRow) Clipboard")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                }
+
                 Spacer()
-                Text("Row \(entry.sourceRow)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(TrackerPalette.textPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(TrackerPalette.raised)
-                    .clipShape(Capsule())
-            }
 
-            Text(entry.content)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let copiedAt = entry.copiedAt {
-                Text("Copied \(copiedAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption)
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            if entry.parts.count >= 2 {
-                VStack(spacing: 8) {
-                    ForEach(Array(entry.parts.enumerated()), id: \.offset) { index, part in
-                        let isHashtagPart = part.contains("#")
-                        let partLabel = isHashtagPart ? "Copy Hashtags" : (index == 0 ? "Copy Title / Caption" : "Copy Part \(index + 1)")
-                        Button {
-                            state.copyCustomTextToClipboard(part, for: entry, label: partLabel, context: context)
-                        } label: {
-                            HStack {
-                                Image(systemName: isHashtagPart ? "number" : "doc.on.clipboard")
-                                Text(partLabel)
-                                    .lineLimit(1)
-                                Spacer()
-                                Text(part)
-                                    .font(.caption2)
-                                    .foregroundStyle(TrackerPalette.muted)
-                                    .lineLimit(1)
-                            }
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .background(TrackerPalette.surface)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(TrackerPalette.line, lineWidth: 0.5)
-                            }
-                        }
-                        .buttonStyle(TrackerPressButtonStyle())
+                if let copiedAt = entry.copiedAt {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                        Text("Copied \(copiedAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.system(size: 11, weight: .medium))
                     }
+                    .foregroundStyle(TrackerPalette.success)
+                } else {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(TrackerPalette.warning)
+                            .frame(width: 6, height: 6)
+                        Text("Ready to copy")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(TrackerPalette.warning)
                 }
             }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    Text(entry.content)
+                        .font(.body)
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                        .lineLimit(isExpanded ? nil : 1)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TrackerPalette.muted)
+                        .padding(.top, 3)
+                }
+                .padding(10)
+                .background(TrackerPalette.raised)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded ? "Collapse row \(entry.sourceRow)" : "Expand row \(entry.sourceRow)")
 
             HStack(spacing: 10) {
                 Button {
                     state.copyToClipboard(entry, context: context)
                 } label: {
                     Label(
-                        entry.copiedAt == nil ? (entry.parts.count >= 2 ? "Copy Full Row" : "Copy to Clipboard") : "Copy Again",
-                        systemImage: "doc.on.doc"
+                        entry.copiedAt == nil ? "Copy Row \(entry.sourceRow) to Clipboard" : "Copy Row \(entry.sourceRow) Again",
+                        systemImage: entry.copiedAt == nil ? "doc.on.doc" : "arrow.clockwise"
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                .buttonStyle(TrackerActionButtonStyle(kind: entry.copiedAt == nil ? .primary : .secondary))
 
                 if entry.copiedAt != nil {
                     Button {
@@ -254,6 +268,7 @@ struct CopyEntryCard: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                    .frame(width: 105)
                 }
             }
         }
@@ -271,12 +286,113 @@ struct CopyQueueSetupCard: View {
                 .foregroundStyle(TrackerPalette.warning)
             Text(message)
                 .font(.subheadline.weight(.semibold))
-            Text("On Today, paste the direct Google Sheet link and connect it once. Put Content in A1, then paste each new title and hashtag block into the next empty row in column A.")
+            Text("On Today, paste the direct Google Sheet link and connect it once. Put the first complete caption in row 1, the next caption in row 2, and continue one caption block per Sheet row.")
                 .font(.caption)
                 .foregroundStyle(TrackerPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .trackerCard()
+    }
+}
+
+struct RowClipboardCard: View {
+    @Environment(\.modelContext) private var context
+    @EnvironmentObject private var state: AppState
+    let entry: CopyEntry
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.clipboard.fill")
+                        .font(.caption)
+                        .foregroundStyle(TrackerPalette.accent)
+                    Text("Row \(entry.sourceRow) Clipboard")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                }
+
+                Spacer()
+
+                if let copiedAt = entry.copiedAt {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11))
+                        Text("Copied \(copiedAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(TrackerPalette.success)
+                } else {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(TrackerPalette.warning)
+                            .frame(width: 6, height: 6)
+                        Text("Ready to copy")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(TrackerPalette.warning)
+                }
+            }
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    Text(entry.content)
+                        .font(.subheadline)
+                        .foregroundStyle(TrackerPalette.textPrimary)
+                        .lineLimit(isExpanded ? nil : 1)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(TrackerPalette.muted)
+                        .padding(.top, 2)
+                }
+                .padding(10)
+                .background(TrackerPalette.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(TrackerPalette.line, lineWidth: 0.5)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded ? "Collapse row \(entry.sourceRow)" : "Expand row \(entry.sourceRow)")
+
+            HStack(spacing: 8) {
+                Button {
+                    state.copyToClipboard(entry, context: context)
+                } label: {
+                    Label(
+                        entry.copiedAt == nil ? "Copy Row \(entry.sourceRow) to Clipboard" : "Copy Row \(entry.sourceRow) Again",
+                        systemImage: entry.copiedAt == nil ? "doc.on.doc" : "arrow.clockwise"
+                    )
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: entry.copiedAt == nil ? .primary : .secondary))
+
+                if entry.copiedAt != nil {
+                    Button {
+                        state.markCopyEntryUncopied(entry, context: context)
+                    } label: {
+                        Label("Uncopy", systemImage: "arrow.uturn.backward")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                    .frame(width: 95)
+                }
+            }
+        }
+        .padding(12)
+        .background(TrackerPalette.raised)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(TrackerPalette.line, lineWidth: 0.8)
+        }
     }
 }
 
@@ -291,25 +407,49 @@ struct GlobalCopyQueueCard: View {
     @State private var queueLinkDraft = ""
     @FocusState private var isQueueLinkFocused: Bool
 
-    private var nextEntry: CopyEntry? {
-        activeEntries
-            .filter { $0.copiedAt == nil }
-            .min { $0.sourceRow < $1.sourceRow }
-    }
-
     private var activeEntries: [CopyEntry] {
         allEntries.filter {
             !$0.isMissingFromDrive &&
             $0.googleUserID == state.auth.userID
         }
+        .sorted(by: { $0.sourceRow < $1.sourceRow })
+    }
+
+    private var uncopiedEntries: [CopyEntry] {
+        activeEntries.filter { $0.copiedAt == nil }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            TrackerSectionLabel(
-                title: "Global copy queue",
-                trailing: "\(activeEntries.filter { $0.copiedAt == nil }.count) uncopied"
-            )
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                TrackerSectionLabel(
+                    title: "Global copy queue",
+                    trailing: state.hasGlobalCopyQueueSheet ? "\(uncopiedEntries.count) uncopied" : nil
+                )
+                Spacer()
+                if state.hasGlobalCopyQueueSheet {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isEditingLink.toggle()
+                            if isEditingLink {
+                                queueLinkDraft = state.globalCopyQueueLink
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: isEditingLink ? "xmark" : "link")
+                            Text(isEditingLink ? "Close" : "Sheet Link")
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(TrackerPalette.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(TrackerPalette.raised)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(TrackerPressButtonStyle())
+                }
+            }
 
             if !state.hasGlobalCopyQueueSheet && !isEditingLink {
                 HStack(spacing: 12) {
@@ -345,28 +485,50 @@ struct GlobalCopyQueueCard: View {
                 }
             } else if !state.hasGlobalCopyQueueSheet || isEditingLink {
                 queueLinkSetup
-            } else if let nextEntry {
-                Text(nextEntry.content)
-                    .font(.subheadline)
-                    .lineLimit(5)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    state.copyToClipboard(nextEntry, context: context)
-                } label: {
-                    Label("Copy title and hashtags", systemImage: "doc.on.doc")
-                        .frame(maxWidth: .infinity)
+            } else if !activeEntries.isEmpty {
+                // Focus on the next uncopied caption for quick 1-tap clipboard copy!
+                if let nextEntry = uncopiedEntries.first {
+                    RowClipboardCard(entry: nextEntry)
+                } else {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.headline)
+                            .foregroundStyle(TrackerPalette.success)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("All captions copied")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(TrackerPalette.textPrimary)
+                            Text("All \(activeEntries.count) rows have been copied to clipboard.")
+                                .font(.caption2)
+                                .foregroundStyle(TrackerPalette.muted)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(TrackerPalette.raised)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
 
                 if let issue = state.globalCopyQueueIssue {
                     Label(
-                        "Showing the saved queue because the latest refresh failed: \(issue)",
+                        "Showing saved rows. Automatic refresh will retry: \(issue)",
                         systemImage: "icloud.slash"
                     )
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(TrackerPalette.warning)
                     .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Button {
+                    showQueue = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "list.clipboard")
+                        Text("Open Full Queue (\(activeEntries.count) rows)")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary, compact: true))
             } else if let issue = state.globalCopyQueueIssue {
                 Text(issue)
                     .font(.caption)
@@ -376,25 +538,9 @@ struct GlobalCopyQueueCard: View {
                 }
                 .font(.caption.weight(.semibold))
             } else {
-                Text("No uncopied text is waiting in the Queue sheet.")
+                Text("No text rows found in the Queue sheet. Add entries to Row 1, Row 2, etc.")
                     .font(.caption)
                     .foregroundStyle(TrackerPalette.muted)
-            }
-
-            if state.hasGlobalCopyQueueSheet {
-                let uncopiedCount = activeEntries.filter { $0.copiedAt == nil }.count
-                Button {
-                    showQueue = true
-                } label: {
-                    Label(
-                        uncopiedCount > 0
-                            ? "Open full copy queue (\(uncopiedCount) ready)"
-                            : "Open full copy queue (\(activeEntries.count) rows)",
-                        systemImage: "list.clipboard"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
             }
         }
         .trackerCard()

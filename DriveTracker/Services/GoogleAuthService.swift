@@ -133,6 +133,24 @@ final class GoogleAuthService: ObservableObject {
         return token
     }
 
+    func idToken() async throws -> String {
+        guard let current = GIDSignIn.sharedInstance.currentUser else {
+            throw GoogleAuthError.notSignedIn
+        }
+        let refreshed = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<GIDGoogleUser, Error>) in
+            current.refreshTokensIfNeeded { user, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let user { continuation.resume(returning: user) }
+                else { continuation.resume(throwing: GoogleAuthError.missingToken) }
+            }
+        }
+        guard let token = refreshed.idToken?.tokenString, !token.isEmpty else {
+            throw GoogleAuthError.missingToken
+        }
+        return token
+    }
+
     func signOut() {
         GIDSignIn.sharedInstance.signOut()
         apply(user: nil)

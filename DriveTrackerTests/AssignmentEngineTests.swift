@@ -4,6 +4,11 @@ import XCTest
 
 @MainActor
 final class AssignmentEngineTests: XCTestCase {
+    func testFutureDateIsNotToday() {
+        let futureDate = Calendar.autoupdatingCurrent.date(byAdding: .day, value: 2, to: .now)!
+        XCTAssertFalse(DayKey.isToday(futureDate))
+    }
+
     private lazy var container: ModelContainer = {
         let schema = Schema([
             TikTokAccount.self,

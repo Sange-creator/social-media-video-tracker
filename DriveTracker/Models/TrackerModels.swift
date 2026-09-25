@@ -54,6 +54,31 @@ enum StatusEventKind: String, Codable {
     }
 }
 
+enum UploadTextSyncState: String, Codable, CaseIterable {
+    case synced
+    case saving
+    case offline
+    case conflict
+
+    var title: String {
+        switch self {
+        case .synced: "Synced"
+        case .saving: "Saving"
+        case .offline: "Saved on this iPhone"
+        case .conflict: "Needs review"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .synced: "checkmark.icloud"
+        case .saving: "arrow.triangle.2.circlepath.icloud"
+        case .offline: "iphone"
+        case .conflict: "exclamationmark.arrow.triangle.2.circlepath"
+        }
+    }
+}
+
 @Model
 final class DriveSource {
     @Attribute(.unique) var id: UUID
@@ -217,6 +242,38 @@ final class TikTokAccount {
     var uncopiedCount: Int {
         activeCopyEntries.filter { $0.copiedAt == nil }.count
     }
+
+    var hasPhotos: Bool {
+        videos.contains { $0.isPhoto && !$0.isMissingFromDrive }
+    }
+
+    var availablePhotosCount: Int {
+        videos.filter { $0.isPhoto && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }.count
+    }
+
+    var availableVideosCount: Int {
+        videos.filter { $0.isVideo && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }.count
+    }
+
+    var availablePhotos: [VideoAsset] {
+        videos.filter { $0.isPhoto && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    var downloadedPhotos: [VideoAsset] {
+        videos.filter { $0.isPhoto && ($0.status == .downloaded || $0.status == .uploaded) && !$0.isMissingFromDrive }
+            .sorted { ($0.uploadedAt ?? $0.downloadedAt ?? .distantPast) > ($1.uploadedAt ?? $1.downloadedAt ?? .distantPast) }
+    }
+
+    var availableVideosList: [VideoAsset] {
+        videos.filter { $0.isVideo && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    var downloadedVideosList: [VideoAsset] {
+        videos.filter { $0.isVideo && ($0.status == .downloaded || $0.status == .uploaded) && !$0.isMissingFromDrive }
+            .sorted { ($0.uploadedAt ?? $0.downloadedAt ?? .distantPast) > ($1.uploadedAt ?? $1.downloadedAt ?? .distantPast) }
+    }
 }
 
 enum AccountIconCatalog {
@@ -312,6 +369,14 @@ final class VideoAsset {
     var uploadedAt: Date?
     var photoLocalIdentifier: String?
     var isMissingFromPhotos: Bool = false
+    /// The complete title, caption, and hashtag block associated with this
+    /// Drive file. The Drive file ID remains the canonical identity when a
+    /// file is renamed or moved.
+    var uploadText: String = ""
+    var workspaceMediaID: String?
+    var uploadTextRevision: Int = 0
+    var uploadTextUpdatedAt: Date?
+    var uploadTextSyncStateRawValue: String = UploadTextSyncState.synced.rawValue
     var createdAt: Date
     var updatedAt: Date
 
@@ -361,6 +426,11 @@ final class VideoAsset {
         self.uploadedAt = nil
         self.photoLocalIdentifier = nil
         self.isMissingFromPhotos = false
+        self.uploadText = ""
+        self.workspaceMediaID = nil
+        self.uploadTextRevision = 0
+        self.uploadTextUpdatedAt = nil
+        self.uploadTextSyncStateRawValue = UploadTextSyncState.synced.rawValue
         self.createdAt = .now
         self.updatedAt = .now
         self.account = account
@@ -370,6 +440,11 @@ final class VideoAsset {
 
     static func makeIdentityKey(googleUserID: String, accountFolderID: String, driveFileID: String) -> String {
         "\(googleUserID)|\(accountFolderID)|\(driveFileID)"
+    }
+
+    var uploadTextSyncState: UploadTextSyncState {
+        get { UploadTextSyncState(rawValue: uploadTextSyncStateRawValue) ?? .synced }
+        set { uploadTextSyncStateRawValue = newValue.rawValue }
     }
 
     var activeAssignment: DailyAssignment? {

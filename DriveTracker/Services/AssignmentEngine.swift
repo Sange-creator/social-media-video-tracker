@@ -56,7 +56,7 @@ struct AssignmentEngine {
         }
         let needed = max(0, account.dailyQuota - outstanding.count - completedToday)
         let candidates = account.videos.filter {
-            $0.status == .available && !$0.isMissingFromDrive && $0.canDownload
+            $0.isVideo && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload
         }
         let orderedCandidates: [VideoAsset]
         switch account.suggestionStrategy {
@@ -182,6 +182,7 @@ struct AssignmentEngine {
 
         let replacements = account.videos.filter {
             $0 !== oldVideo &&
+            $0.isVideo &&
             $0.status == .available &&
             !$0.isMissingFromDrive &&
             $0.canDownload
@@ -275,6 +276,7 @@ struct AssignmentEngine {
             // Shuffle is deliberately stricter than the normal available pool:
             // once a video has been shown as a suggestion, do not surface it
             // again through Shuffle. Only genuinely unseen videos qualify.
+            $0.isVideo &&
             $0.status == .available &&
             $0.assignments.isEmpty &&
             !$0.isMissingFromDrive &&

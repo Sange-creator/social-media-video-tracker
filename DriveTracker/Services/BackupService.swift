@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 struct TrackerBackup: Codable {
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
 
     let schemaVersion: Int
     let revision: Int
@@ -79,6 +79,10 @@ struct TrackerBackup: Codable {
         let uploadedAt: Date?
         let photoLocalIdentifier: String?
         let isMissingFromPhotos: Bool?
+        let uploadText: String?
+        let uploadTextRevision: Int?
+        let uploadTextUpdatedAt: Date?
+        let workspaceMediaID: String?
         let createdAt: Date
         let updatedAt: Date
     }
@@ -373,6 +377,10 @@ final class BackupService {
                     uploadedAt: video.uploadedAt,
                     photoLocalIdentifier: video.photoLocalIdentifier,
                     isMissingFromPhotos: video.isMissingFromPhotos,
+                    uploadText: video.uploadText,
+                    uploadTextRevision: video.uploadTextRevision,
+                    uploadTextUpdatedAt: video.uploadTextUpdatedAt,
+                    workspaceMediaID: video.workspaceMediaID,
                     createdAt: video.createdAt,
                     updatedAt: video.updatedAt
                 )
@@ -512,6 +520,11 @@ final class BackupService {
             video.uploadedAt = record.uploadedAt
             video.photoLocalIdentifier = record.photoLocalIdentifier
             video.isMissingFromPhotos = record.isMissingFromPhotos ?? false
+            video.uploadText = record.uploadText ?? ""
+            video.uploadTextRevision = record.uploadTextRevision ?? 0
+            video.uploadTextUpdatedAt = record.uploadTextUpdatedAt
+            video.workspaceMediaID = record.workspaceMediaID
+            video.uploadTextSyncState = .offline
             video.createdAt = record.createdAt
             video.updatedAt = record.updatedAt
             context.insert(video)

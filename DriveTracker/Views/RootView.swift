@@ -68,7 +68,6 @@ struct RootView: View {
                 state.statusMessage = nil
             }
             .tint(TrackerPalette.accent)
-            .preferredColorScheme(.dark)
     }
 
     private var rootContent: AnyView {
@@ -190,97 +189,15 @@ struct MainTabView: View {
     @State private var selectedTab: Int = 0
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            // Keep only the selected tab in the view tree. The previous
-            // opacity-based stack rendered all five tabs at once, so every
-            // scroll gesture also laid out Settings, Analytics, Library,
-            // Accounts, and Today together.
-            selectedTabContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Bottom gradient veil anchored to absolute device bottom
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [
-                        TrackerPalette.canvas.opacity(0),
-                        TrackerPalette.canvas
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 36)
-
-                Rectangle()
-                    .fill(TrackerPalette.canvas)
-                    .frame(height: 54)
-            }
-            .frame(maxWidth: .infinity)
-            .allowsHitTesting(false)
-            .compositingGroup()
-
-            floatingDock
-                .compositingGroup()
+        TabView(selection: $selectedTab) {
+            TodayView().tabItem { Label("Today", systemImage: "calendar") }.tag(0)
+            CopyQueueScreen().tabItem { Label("Clipboard", systemImage: "doc.on.clipboard.fill") }.tag(1)
+            LibraryView().tabItem { Label("Library", systemImage: "rectangle.stack") }.tag(2)
+            AccountsView().tabItem { Label("Accounts", systemImage: "person.2") }.tag(3)
+            AnalyticsView().tabItem { Label("Analytics", systemImage: "chart.bar.xaxis") }.tag(4)
+            SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(5)
         }
-        .ignoresSafeArea(.all, edges: .bottom)
-    }
-
-    @ViewBuilder
-    private var selectedTabContent: some View {
-        switch selectedTab {
-        case 0: TodayView()
-        case 1: AnalyticsView()
-        case 2: LibraryView()
-        case 3: AccountsView()
-        default: SettingsView()
-        }
-    }
-
-    private var floatingDock: some View {
-        HStack(spacing: 0) {
-            dockItem(index: 0, title: "Today", icon: "calendar")
-            dockItem(index: 1, title: "Analytics", icon: "chart.bar.xaxis")
-            dockItem(index: 2, title: "Library", icon: "rectangle.stack")
-            dockItem(index: 3, title: "Accounts", icon: "person.2")
-            dockItem(index: 4, title: "Settings", icon: "gearshape")
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 6)
-        .background(
-            Color(hex: "#131622").opacity(0.98)
-        )
-        .clipShape(Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color(hex: "#222739"), lineWidth: 1)
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 28)
-    }
-
-    @ViewBuilder
-    private func dockItem(index: Int, title: String, icon: String) -> some View {
-        let isSelected = selectedTab == index
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                selectedTab = index
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 17, weight: isSelected ? .bold : .medium))
-                    .foregroundStyle(isSelected ? TrackerPalette.accent : TrackerPalette.muted)
-
-                Text(title)
-                    .font(.system(size: 10, weight: isSelected ? .bold : .medium))
-                    .foregroundStyle(isSelected ? TrackerPalette.accent : TrackerPalette.muted)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(
-                isSelected ? TrackerPalette.accent.opacity(0.12) : Color.clear,
-                in: Capsule()
-            )
-        }
-        .buttonStyle(TrackerPressButtonStyle())
+        .toolbarBackground(TrackerPalette.surface, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
     }
 }

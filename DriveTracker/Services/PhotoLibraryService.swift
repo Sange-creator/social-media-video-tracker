@@ -169,7 +169,10 @@ nonisolated final class PhotoLibraryService: Sendable {
     /// Checks if the video at the given URL is compatible with the Photos album.
     /// If incompatible (e.g. non-standard container or codec), transcodes it using AVAssetExportSession.
     private func ensureCompatibleVideoFile(at url: URL) async throws -> (url: URL, isTemporary: Bool) {
-        if UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(url.path) {
+        let isCompatible = await Task.detached(priority: .userInitiated) {
+            UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(url.path)
+        }.value
+        if isCompatible {
             return (url, false)
         }
 

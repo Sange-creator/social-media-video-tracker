@@ -320,12 +320,14 @@ private struct AccountLibraryView: View {
 
     private var filterBar: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("Media Format", selection: $mediaFilter) {
-                ForEach(MediaTypeFilter.allCases) { type in
-                    Text(type.rawValue).tag(type)
+            if account.hasPhotos {
+                Picker("Media Format", selection: $mediaFilter) {
+                    ForEach(MediaTypeFilter.allCases) { type in
+                        Text(type.rawValue).tag(type)
+                    }
                 }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -733,6 +735,8 @@ struct VideoDetailView: View {
     @State private var confirmReset = false
     @State private var confirmRedownload = false
     @State private var showPreview = false
+    @State private var uploadTextDraft = ""
+    @FocusState private var uploadTextFocused: Bool
 
     private var sortedEvents: [StatusEvent] {
         video.events.sorted { $0.timestamp > $1.timestamp }
@@ -742,6 +746,7 @@ struct VideoDetailView: View {
         ScrollView {
             LazyVStack(spacing: 16) {
                 videoCard
+                uploadTextCard
                 historyCard
             }
             .padding(16)
@@ -777,6 +782,79 @@ struct VideoDetailView: View {
         .sheet(isPresented: $showPreview) {
             VideoPreviewView(video: video)
         }
+        .onAppear {
+            uploadTextDraft = video.uploadText
+        }
+    }
+
+    private var uploadTextCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                TrackerSectionLabel(title: "Upload text")
+                Spacer()
+                Label(video.uploadTextSyncState.title, systemImage: video.uploadTextSyncState.symbol)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(
+                        video.uploadTextSyncState == .conflict
+                            ? TrackerPalette.warning
+                            : TrackerPalette.muted
+                    )
+            }
+
+            ZStack(alignment: .topLeading) {
+                if uploadTextDraft.isEmpty {
+                    Text("Paste the title, caption, and hashtags here as one block.")
+                        .font(.body)
+                        .foregroundStyle(TrackerPalette.muted)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 15)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $uploadTextDraft)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .foregroundStyle(TrackerPalette.textPrimary)
+                    .frame(minHeight: 150)
+                    .padding(8)
+                    .focused($uploadTextFocused)
+            }
+            .background(TrackerPalette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(uploadTextFocused ? TrackerPalette.accent : TrackerPalette.line, lineWidth: 1)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    state.saveUploadText(uploadTextDraft, for: video, context: context)
+                    uploadTextFocused = false
+                } label: {
+                    Label("Save text", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                .disabled(uploadTextDraft == video.uploadText)
+
+                Button {
+                    if uploadTextDraft != video.uploadText {
+                        state.saveUploadText(uploadTextDraft, for: video, context: context)
+                    }
+                    state.copyUploadText(for: video)
+                    uploadTextFocused = false
+                } label: {
+                    Label("Copy text", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                .disabled(uploadTextDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Text("The text stays attached to this Drive file even if the file is renamed or moved.")
+                .font(.caption)
+                .foregroundStyle(TrackerPalette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .trackerCard(padding: 16)
     }
 
     private var videoCard: some View {
@@ -1331,6 +1409,47 @@ struct VideoPreviewView: View {
                                 .foregroundStyle(TrackerPalette.muted)
                         }
                         .padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .trackerCard(padding: 14)
+
+                    // Upload Text / Caption & Hashtags Block
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            TrackerSectionLabel(
+                                title: "Upload text",
+                                trailing: video.uploadText.isEmpty ? "No caption" : "\(video.uploadText.count) chars"
+                            )
+                            Spacer()
+                            if !video.uploadText.isEmpty {
+                                Button {
+                                    state.copyUploadText(for: video)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "doc.on.clipboard.fill")
+                                        Text("Copy to Clipboard")
+                                    }
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(Color(hex: "#090A0F"))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(TrackerPalette.accent, in: Capsule())
+                                }
+                                .buttonStyle(TrackerPressButtonStyle())
+                            }
+                        }
+
+                        if video.uploadText.isEmpty {
+                            Text("No caption attached to this Drive file. Add a title, caption, and hashtags from the Mac dashboard or attach text in Library.")
+                                .font(.caption)
+                                .foregroundStyle(TrackerPalette.muted)
+                        } else {
+                            Text(video.uploadText)
+                                .font(.subheadline)
+                                .foregroundStyle(TrackerPalette.textPrimary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .trackerCard(padding: 14)

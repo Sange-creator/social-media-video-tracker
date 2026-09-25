@@ -262,13 +262,20 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
             let mimeType = downloadTask.response?.mimeType?.lowercased() ?? ""
 
             let validVideoExtensions: Set<String> = ["mp4", "mov", "m4v", "m4a", "webm", "mkv", "avi", "3gp", "ts"]
+            let validPhotoExtensions: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "webp", "gif"]
             let finalExtension: String
-            if validVideoExtensions.contains(expectedExtension) {
+            if validVideoExtensions.contains(expectedExtension) || validPhotoExtensions.contains(expectedExtension) {
                 finalExtension = expectedExtension
-            } else if validVideoExtensions.contains(suggestedExtension) {
+            } else if validVideoExtensions.contains(suggestedExtension) || validPhotoExtensions.contains(suggestedExtension) {
                 finalExtension = suggestedExtension
             } else if mimeType.contains("quicktime") {
                 finalExtension = "mov"
+            } else if mimeType.contains("jpeg") || mimeType.contains("jpg") {
+                finalExtension = "jpg"
+            } else if mimeType.contains("png") {
+                finalExtension = "png"
+            } else if mimeType.contains("heic") {
+                finalExtension = "heic"
             } else {
                 finalExtension = "mp4"
             }

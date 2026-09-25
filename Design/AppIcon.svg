@@ -1,12 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="vaultV" x1="228" y1="170" x2="796" y2="870" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0B2E78"/>
-      <stop offset="1" stop-color="#1769F5"/>
-    </linearGradient>
-  </defs>
-  <path d="M218 166c-38-34-96-4-92 47l59 627c4 45 54 68 91 41l243-177 238 177c37 27 87 4 91-41l59-627c4-51-54-81-92-47L512 406 218 166Z" fill="url(#vaultV)"/>
-  <path d="m230 232 282 221 282-221-48 522-234-174-234 174-48-522Z" fill="#08215C" opacity=".72"/>
-  <path d="M430 468c0-25 28-40 50-27l170 98c22 13 22 45 0 58l-170 98c-22 13-50-2-50-28V468Z" fill="#FFFFFF"/>
-  <path d="m474 510 101 58-101 58V510Z" fill="#1769F5"/>
+  <rect width="1024" height="1024" rx="224" fill="#15213A"/>
+  <rect x="176" y="140" width="556" height="744" rx="132" fill="#F8FAFC"/>
+  <path d="M388 352v320l256-160-256-160Z" fill="#2563EB"/>
+  <path d="M680 430h154c69 0 126 57 126 126v220c0 69-57 126-126 126H616l64-78V430Z" fill="#2563EB" stroke="#15213A" stroke-width="48" stroke-linejoin="round"/>
+  <path d="M762 590h104M762 674h104" stroke="#F8FAFC" stroke-width="38" stroke-linecap="round"/>
 </svg>

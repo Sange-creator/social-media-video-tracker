@@ -5,7 +5,6 @@ import XCTest
 final class CopyQueueCSVParserTests: XCTestCase {
     func testParsesHeaderUnicodeQuotesCommasAndMultilineContent() throws {
         let csv = """
-        Content,Ignored
         "First title, with comma
         #one #two",x
         "Emoji 😀 and ""quoted"" words",y
@@ -14,27 +13,42 @@ final class CopyQueueCSVParserTests: XCTestCase {
         let rows = try CopyQueueCSVParser.rows(from: Data(csv.utf8))
 
         XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(rows[0].sourceRow, 2)
-        XCTAssertEqual(rows[0].content, "First title, with comma\n#one #two")
-        XCTAssertEqual(rows[1].content, "Emoji 😀 and \"quoted\" words")
+        XCTAssertEqual(rows[0].sourceRow, 1)
+        XCTAssertEqual(rows[0].content, "First title, with comma\n#one #two\n\nx")
+        XCTAssertEqual(rows[1].sourceRow, 2)
+        XCTAssertEqual(rows[1].content, "Emoji 😀 and \"quoted\" words\n\ny")
     }
 
-    func testIgnoresBlankRowsAndKeepsNewestIdenticalContent() throws {
+    func testIgnoresBlankRowsAndKeepsAllContentInRowOrder() throws {
         let csv = """
-        Content
-        Same title #tag
+        First title #tag1
 
-        Different title
-        Same title #tag
+        Second title #tag2
+        Third title #tag3
         """
 
         let rows = try CopyQueueCSVParser.rows(from: Data(csv.utf8))
 
-        XCTAssertEqual(rows.count, 2)
-        XCTAssertEqual(
-            rows.first { $0.content == "Same title #tag" }?.sourceRow,
-            5
-        )
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual(rows[0].sourceRow, 1)
+        XCTAssertEqual(rows[1].sourceRow, 3)
+        XCTAssertEqual(rows[2].sourceRow, 4)
+    }
+
+    func testPreservesMultilineBlockAsSingleRowClipboardWithBlankRow1() throws {
+        let csv = """
+
+
+        "Kids Today vs. 90s UK Kids 🇬🇧 | The Brutal Sunday Dread & VHS Shop Rules | NostalgiaUK Did your weekend end with the heavy dread of staring at an ironed school shirt? 🥺 From Saturday morning cereal on th...
+        Hit FOLLOW to keep the VHS rolling with NostalgiaUK... the tape's not done yet! 📼🇬🇧 #NostalgiaUK #90schildhood #BritishNostalgia #90sKidsUK #ChildhoodMemories"
+        """
+
+        let rows = try CopyQueueCSVParser.rows(from: Data(csv.utf8))
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].sourceRow, 3)
+        XCTAssertTrue(rows[0].content.contains("Kids Today vs. 90s UK Kids"))
+        XCTAssertTrue(rows[0].content.contains("#ChildhoodMemories"))
     }
 
     func testContentHashIsStableAndChangesAfterEdit() {
@@ -48,13 +62,13 @@ final class CopyQueueCSVParserTests: XCTestCase {
         )
     }
 
-    func testAcceptsUTF8BOMBeforeOptionalContentHeader() throws {
-        let csv = "\u{feff}Content\nNewest title #tag"
+    func testAcceptsUTF8BOMBeforeContentAndPreservesRow1() throws {
+        let csv = "\u{feff}Newest title #tag"
 
         let rows = try CopyQueueCSVParser.rows(from: Data(csv.utf8))
 
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows[0].sourceRow, 2)
+        XCTAssertEqual(rows[0].sourceRow, 1)
         XCTAssertEqual(rows[0].content, "Newest title #tag")
     }
 

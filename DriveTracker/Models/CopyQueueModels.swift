@@ -91,13 +91,6 @@ final class CopyEntry {
     ) -> String {
         "\(googleUserID)|\(accountFolderID)|\(sourceSheetID)|\(contentHash)"
     }
-
-    var parts: [String] {
-        content
-            .components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
 }
 
 @Model

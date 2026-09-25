@@ -59,18 +59,8 @@ enum CopyQueueCSVParser {
         let table = try parse(string)
         guard !table.isEmpty else { return [] }
 
-        var firstDataRow = 0
-        if let firstCell = table.first?.first?
-            .replacingOccurrences(of: "\u{feff}", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        {
-            if ["content", "title", "caption", "description", "tags", "hashtags"].contains(firstCell) {
-                firstDataRow = 1
-            }
-        }
-
         var rows: [CopyQueueRow] = []
-        for index in firstDataRow ..< table.count {
+        for index in 0 ..< table.count {
             let cells = table[index].map {
                 $0.replacingOccurrences(of: "\u{feff}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
             }
@@ -80,6 +70,8 @@ enum CopyQueueCSVParser {
             let hash = contentHash(content)
             rows.append(
                 CopyQueueRow(
+                    // Preserve the physical Sheet row. Blank rows stay blank
+                    // instead of shifting every clipboard below them.
                     sourceRow: index + 1,
                     content: content,
                     contentHash: hash
@@ -106,6 +98,7 @@ enum CopyQueueCSVParser {
         func finishField() {
             row.append(field)
             field = ""
+            isQuoted = false
         }
 
         func finishRow() {
@@ -130,13 +123,20 @@ enum CopyQueueCSVParser {
             } else {
                 switch character {
                 case "\"":
-                    isQuoted = true
+                    if field.trimmingCharacters(in: .whitespaces).isEmpty {
+                        isQuoted = true
+                        field = ""
+                    } else {
+                        field.append("\"")
+                    }
                 case ",":
                     finishField()
                 case "\n":
                     finishRow()
                 case "\r":
-                    if index + 1 >= characters.count || characters[index + 1] != "\n" {
+                    if index + 1 < characters.count && characters[index + 1] == "\n" {
+                        // Skip \r in \r\n, row will be finished on \n
+                    } else {
                         finishRow()
                     }
                 default:
@@ -146,7 +146,10 @@ enum CopyQueueCSVParser {
             index += 1
         }
 
-        guard !isQuoted else { throw CopyQueueError.invalidCSV }
+        if isQuoted {
+            throw CopyQueueError.invalidCSV
+        }
+
         if !field.isEmpty || !row.isEmpty {
             finishRow()
         }
@@ -262,15 +265,6 @@ final class CopyQueueService {
         let existingByKey = Dictionary(
             existing.map { ($0.identityKey, $0) },
             uniquingKeysWith: { first, _ in first }
-        )
-        let existingByContent = Dictionary(
-            grouping: existing,
-            by: {
-                Self.semanticKey(
-                    sheetID: $0.sourceSheetID,
-                    contentHash: $0.contentHash
-                )
-            }
         )
         var seenKeys = Set<String>()
         var newEntries = 0

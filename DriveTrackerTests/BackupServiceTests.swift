@@ -60,6 +60,9 @@ final class BackupServiceTests: XCTestCase {
                 entry: copyEntry
             )
         )
+        video.uploadText = "Caption from backup #test"
+        video.uploadTextRevision = 3
+        video.workspaceMediaID = "ws-media-123"
         try sourceContext.save()
 
         let service = BackupService(
@@ -95,6 +98,9 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(restoredVideos[0].status, .uploaded)
         XCTAssertEqual(restoredVideos[0].account?.displayName, "@backup")
         XCTAssertEqual(restoredVideos[0].photoLocalIdentifier, "local-photo")
+        XCTAssertEqual(restoredVideos[0].uploadText, "Caption from backup #test")
+        XCTAssertEqual(restoredVideos[0].uploadTextRevision, 3)
+        XCTAssertEqual(restoredVideos[0].workspaceMediaID, "ws-media-123")
         XCTAssertTrue(restoredEvents.contains { $0.kind == .downloadSucceeded })
         XCTAssertTrue(restoredEvents.contains { $0.kind == .uploadConfirmed })
         XCTAssertEqual(restoredCopyEntries.count, 1)
