@@ -137,6 +137,7 @@ final class CopyQueueCSVParserTests: XCTestCase {
             id: id,
             name: name,
             mimeType: mimeType,
+            parents: nil,
             size: nil,
             md5Checksum: nil,
             modifiedTime: nil,

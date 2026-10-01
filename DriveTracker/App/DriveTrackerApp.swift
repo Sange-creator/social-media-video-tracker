@@ -42,8 +42,14 @@ struct DriveTrackerApp: App {
             Task {
                 switch newPhase {
                 case .active:
-                    await state.sync(context: container.mainContext, announce: false)
+                    if let last = state.lastSyncAt, Date().timeIntervalSince(last) < 60 {
+                        state.startDriveChangeMonitor(context: container.mainContext)
+                    } else {
+                        await state.sync(context: container.mainContext, announce: false)
+                        state.startDriveChangeMonitor(context: container.mainContext)
+                    }
                 case .background:
+                    state.stopDriveChangeMonitor()
                     await state.backupNow(context: container.mainContext)
                 default:
                     break

@@ -329,12 +329,6 @@ final class AppState: ObservableObject {
         guard !isWorking else {
             driveSyncRequestedWhileWorking = true
             queuedDriveSyncContext = context
-            // Await the active and queued sync so the user's manual reload never
-            // drops or exits prematurely before fresh data is persisted.
-            while isWorking || driveSyncRequestedWhileWorking {
-                try? await Task.sleep(for: .milliseconds(120))
-                guard !Task.isCancelled else { return }
-            }
             return
         }
         isWorking = true
@@ -386,7 +380,9 @@ final class AppState: ObservableObject {
             if announce {
                 statusMessage = "Folder check complete: \(videoCount) videos tracked; \(newVideoCount) new."
             }
-            scheduleBackup(context: context)
+            if newVideoCount > 0 {
+                scheduleBackup(context: context)
+            }
         } catch {
             guard !isCancellation(error) else { return }
             if announce {
@@ -412,46 +408,80 @@ final class AppState: ObservableObject {
 
         let tokenKey = changesTokenKey(for: userID)
         guard let token = defaults.string(forKey: tokenKey), !token.isEmpty else {
-            // First time: fetch start token and run baseline sync
+            // First time: fetch start token without forcing full immediate sync
             if let startToken = try? await api.startPageToken() {
                 defaults.set(startToken, forKey: tokenKey)
             }
-            await sync(context: context, announce: false)
             return
         }
 
         do {
             let (changes, nextToken) = try await api.listChanges(pageToken: token)
-            guard !changes.isEmpty else { return }
+            defaults.set(nextToken, forKey: tokenKey)
+
+            // Ignore internal backup file changes to break the feedback loop
+            let nonBackupChanges = changes.filter { change in
+                if let name = change.file?.name, name == BackupService.fileName {
+                    return false
+                }
+                return true
+            }
+            guard !nonBackupChanges.isEmpty else { return }
+
+            // Fast relevance filtering: only sync if changes touch our tracked folders or files
+            let accounts = (try? context.fetch(FetchDescriptor<TikTokAccount>()))?
+                .filter { $0.googleUserID == userID } ?? []
+
+            var trackedFolderIDs = Set<String>()
+            for source in sources {
+                trackedFolderIDs.insert(source.rootFolderID)
+            }
+            for account in accounts {
+                trackedFolderIDs.insert(account.driveFolderID)
+            }
+
+            let existingVideos = (try? context.fetch(FetchDescriptor<VideoAsset>()))?
+                .filter { $0.googleUserID == userID } ?? []
+            let trackedFileIDs = Set(existingVideos.map(\.driveFileID))
+
+            let hasRelevantChange = nonBackupChanges.contains { change in
+                if let fileId = change.fileId {
+                    if trackedFolderIDs.contains(fileId) || trackedFileIDs.contains(fileId) {
+                        return true
+                    }
+                }
+                if let file = change.file {
+                    if trackedFolderIDs.contains(file.id) || trackedFileIDs.contains(file.id) {
+                        return true
+                    }
+                    if let parents = file.parents, parents.contains(where: { trackedFolderIDs.contains($0) }) {
+                        return true
+                    }
+                }
+                return false
+            }
+
+            guard hasRelevantChange else { return }
 
             await sync(context: context, announce: false)
-            defaults.set(nextToken, forKey: tokenKey)
         } catch {
+            // Do NOT trigger full sync on check errors (avoids infinite error loop).
+            // Simply refresh start token if token expired.
             if let startToken = try? await api.startPageToken() {
                 defaults.set(startToken, forKey: tokenKey)
             }
-            await sync(context: context, announce: false)
         }
     }
 
-    /// Foreground monitor for lightweight Drive change checks. A full
-    /// reconciliation is retained as a slow repair path rather than repeating
-    /// every few seconds while the user scrolls.
+    /// Foreground monitor for lightweight Drive change checks with a safe 30s throttle.
     func startDriveChangeMonitor(context: ModelContext) {
-        changesMonitoringTask?.cancel()
+        guard changesMonitoringTask == nil || changesMonitoringTask?.isCancelled == true else { return }
         changesMonitoringTask = Task(priority: .utility) { [weak self] in
-            var checkCount = 0
             while !Task.isCancelled {
                 guard !Task.isCancelled, let self else { return }
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { return }
-                checkCount += 1
                 await self.checkForDriveChanges(context: context)
-                // Repair missed notifications without constantly walking every
-                // nested folder. Normal changes trigger their own immediate sync.
-                if checkCount % 100 == 0 {
-                    await self.sync(context: context, announce: false)
-                }
             }
         }
     }
@@ -487,6 +517,17 @@ final class AppState: ObservableObject {
     func scheduleDownloadNotifications(context: ModelContext) async {
         let assignments = (try? context.fetch(FetchDescriptor<DailyAssignment>())) ?? []
         await notifications.schedule(assignments: assignments)
+    }
+
+    private var downloadNotificationsDebounceTask: Task<Void, Never>?
+
+    func scheduleDownloadNotificationsDebounced(context: ModelContext) {
+        downloadNotificationsDebounceTask?.cancel()
+        downloadNotificationsDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self else { return }
+            await self.scheduleDownloadNotifications(context: context)
+        }
     }
 
     func setReminderTimeZone(_ id: String, context: ModelContext) {
@@ -613,7 +654,7 @@ final class AppState: ObservableObject {
             toastMessage = "Downloaded and completed • \(video.name)"
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             scheduleBackup(context: context)
-            await scheduleDownloadNotifications(context: context)
+            scheduleDownloadNotificationsDebounced(context: context)
         } catch {
             if !isCancellation(error) {
                 try? assignmentEngine.markDownloadFailed(video, error: error, context: context)
@@ -1232,81 +1273,66 @@ final class AppState: ObservableObject {
 
     func deleteAccount(accountID: UUID, context: ModelContext) {
         do {
-            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
-            guard let account = accounts.first(where: { $0.id == accountID }) else {
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>(predicate: #Predicate { $0.id == accountID }))
+            guard let account = accounts.first else {
                 return
             }
             let sourceID = account.sourceID
             let googleUserID = account.googleUserID
             let folderID = account.driveFolderID
 
-            // 1. Fetch all videos for this account
-            let allVideos = try context.fetch(FetchDescriptor<VideoAsset>())
-            let videos = allVideos.filter {
-                $0.account?.id == accountID ||
-                ($0.googleUserID == googleUserID && $0.accountFolderID == folderID)
+            // 1. Clean up copy entries
+            for entry in account.copyEntries {
+                context.delete(entry)
             }
-            let videoKeys = Set(videos.map(\.identityKey))
-
-            // 2. Delete StatusEvents linked to these videos
-            let allEvents = try context.fetch(FetchDescriptor<StatusEvent>())
-            for event in allEvents where videoKeys.contains(event.video?.identityKey ?? "") || event.video == nil {
-                if let video = event.video, videoKeys.contains(video.identityKey) {
-                    context.delete(event)
+            let orphanedCopyEntries = try context.fetch(FetchDescriptor<CopyEntry>(
+                predicate: #Predicate { entry in
+                    entry.googleUserID == googleUserID && entry.accountFolderID == folderID
                 }
-            }
-
-            // 3. Delete DailyAssignments linked to this account or these videos
-            let allAssignments = try context.fetch(FetchDescriptor<DailyAssignment>())
-            for assignment in allAssignments {
-                if assignment.account?.id == accountID || videoKeys.contains(assignment.video?.identityKey ?? "") {
-                    context.delete(assignment)
-                }
-            }
-
-            // 4. Fetch all CopyEntries for this account
-            let allCopyEntries = try context.fetch(FetchDescriptor<CopyEntry>())
-            let copyEntries = allCopyEntries.filter {
-                $0.account?.id == accountID ||
-                ($0.googleUserID == googleUserID && $0.accountFolderID == folderID)
-            }
-            let copyEntryKeys = Set(copyEntries.map(\.identityKey))
-
-            // 5. Delete CopyEvents linked to these copy entries
-            let allCopyEvents = try context.fetch(FetchDescriptor<CopyEvent>())
-            for copyEvent in allCopyEvents {
-                if let entry = copyEvent.entry, copyEntryKeys.contains(entry.identityKey) {
-                    context.delete(copyEvent)
-                }
-            }
-
-            // 6. Delete CopyEntries
-            for entry in copyEntries {
+            ))
+            for entry in orphanedCopyEntries {
                 context.delete(entry)
             }
 
-            // 7. Delete VideoAssets
-            for video in videos {
+            // 2. Clean up assignments
+            for assignment in account.assignments {
+                context.delete(assignment)
+            }
+
+            // 3. Clean up videos
+            for video in account.videos {
+                context.delete(video)
+            }
+            let orphanedVideos = try context.fetch(FetchDescriptor<VideoAsset>(
+                predicate: #Predicate { video in
+                    video.googleUserID == googleUserID && video.accountFolderID == folderID
+                }
+            ))
+            for video in orphanedVideos {
                 context.delete(video)
             }
 
-            // 8. Delete the TikTokAccount
+            // 4. Delete the TikTokAccount
             context.delete(account)
 
-            // 9. Delete orphaned DriveSource if no other accounts reference it
+            // 5. Delete orphaned DriveSource if no other accounts reference it
             if let sourceID {
-                let remainingAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
-                    .filter { $0.sourceID == sourceID && $0.id != accountID }
-                if remainingAccounts.isEmpty,
-                   let source = try context.fetch(FetchDescriptor<DriveSource>())
-                    .first(where: { $0.id == sourceID }) {
-                    context.delete(source)
+                let remainingAccounts = try context.fetch(FetchDescriptor<TikTokAccount>(
+                    predicate: #Predicate { $0.sourceID == sourceID && $0.id != accountID }
+                ))
+                if remainingAccounts.isEmpty {
+                    let sources = try context.fetch(FetchDescriptor<DriveSource>(
+                        predicate: #Predicate { $0.id == sourceID }
+                    ))
+                    for source in sources {
+                        context.delete(source)
+                    }
                 }
             }
 
             try context.save()
 
-            // 10. Update active source configuration
+            // 6. Update active source configuration
             if let userID = auth.userID {
                 _ = try activateDriveSourceConfiguration(for: userID, context: context)
             } else if try context.fetchCount(FetchDescriptor<DriveSource>()) == 0 {
@@ -1344,8 +1370,7 @@ final class AppState: ObservableObject {
         guard !video.isMissingFromDrive else {
             throw DriveAssociationError.videoMissing
         }
-        let localURL = try await api.previewFile(for: video)
-        return AVPlayerItem(url: localURL)
+        return try await api.streamingPlayerItem(for: video)
     }
 
     func thumbnailImage(for video: VideoAsset) async -> UIImage? {

@@ -16,6 +16,7 @@ struct DriveItem: Decodable, Identifiable, Sendable {
     let id: String
     let name: String
     let mimeType: String
+    let parents: [String]?
     let size: String?
     let md5Checksum: String?
     let modifiedTime: String?
@@ -161,6 +162,7 @@ final class DriveAPIClient {
 
     private let auth: GoogleAuthService
     private let session: URLSession
+    private let thumbnailSession: URLSession
     private let decoder = JSONDecoder()
 
     private static func makeDefaultSession() -> URLSession {
@@ -172,9 +174,20 @@ final class DriveAPIClient {
         return URLSession(configuration: config)
     }
 
+    private static func makeThumbnailSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        config.urlCache = nil
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 6
+        config.timeoutIntervalForResource = 12
+        return URLSession(configuration: config)
+    }
+
     init(auth: GoogleAuthService, session: URLSession? = nil) {
         self.auth = auth
         self.session = session ?? Self.makeDefaultSession()
+        self.thumbnailSession = Self.makeThumbnailSession()
     }
 
     func item(id: String, resourceKey: String? = nil) async throws -> DriveItem {
@@ -309,6 +322,14 @@ final class DriveAPIClient {
         return AVPlayerItem(asset: asset)
     }
 
+    private func thumbnailAuthorizedData(for request: URLRequest) async throws -> Data {
+        let (data, response) = try await thumbnailSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200 ... 299).contains(http.statusCode) else {
+            throw DriveAPIError.invalidResponse
+        }
+        return data
+    }
+
     func thumbnailData(for item: VideoAsset) async throws -> Data {
         // Strategy 1: Attempt to load from item's stored thumbnailLink
         if let link = item.thumbnailLink {
@@ -319,14 +340,16 @@ final class DriveAPIClient {
             )
             if let url = URL(string: scaledLink) {
                 // Google CDN (lh3.googleusercontent.com) often expects unauthenticated requests
-                if let (data, response) = try? await session.data(from: url),
+                if let (data, response) = try? await thumbnailSession.data(from: url),
                    let http = response as? HTTPURLResponse,
                    (200 ... 299).contains(http.statusCode),
                    !data.isEmpty {
                     return data
                 }
                 // Fallback to authorized request if unauthenticated was rejected
-                if let data = try? await data(for: authorizedRequest(url: url)), !data.isEmpty {
+                if let req = try? await authorizedRequest(url: url),
+                   let data = try? await thumbnailAuthorizedData(for: req),
+                   !data.isEmpty {
                     return data
                 }
             }
@@ -340,13 +363,15 @@ final class DriveAPIClient {
                 options: .regularExpression
             )
             if let url = URL(string: scaledLink) {
-                if let (data, response) = try? await session.data(from: url),
+                if let (data, response) = try? await thumbnailSession.data(from: url),
                    let http = response as? HTTPURLResponse,
                    (200 ... 299).contains(http.statusCode),
                    !data.isEmpty {
                     return data
                 }
-                if let data = try? await data(for: authorizedRequest(url: url)), !data.isEmpty {
+                if let req = try? await authorizedRequest(url: url),
+                   let data = try? await thumbnailAuthorizedData(for: req),
+                   !data.isEmpty {
                     return data
                 }
             }
@@ -354,7 +379,9 @@ final class DriveAPIClient {
 
         // Strategy 3: Try Google Drive thumbnail endpoint directly
         if let thumbURL = URL(string: "https://drive.google.com/thumbnail?id=\(item.driveFileID)&sz=w360") {
-            if let data = try? await data(for: authorizedRequest(url: thumbURL)), !data.isEmpty {
+            if let req = try? await authorizedRequest(url: thumbURL),
+               let data = try? await thumbnailAuthorizedData(for: req),
+               !data.isEmpty {
                 return data
             }
         }
@@ -368,11 +395,11 @@ final class DriveAPIClient {
             URLQueryItem(name: "fields", value: "thumbnailLink")
         ]
         guard let url = components?.url else { return nil }
-        let req = try await authorizedRequest(
+        guard let req = try? await authorizedRequest(
             url: url,
             resourceKeys: resourceHeader(id: driveFileID, key: resourceKey)
-        )
-        let rawData = try await data(for: req)
+        ) else { return nil }
+        guard let rawData = try? await thumbnailAuthorizedData(for: req) else { return nil }
         struct FileThumbResponse: Decodable {
             let thumbnailLink: String?
         }
@@ -648,6 +675,6 @@ final class DriveAPIClient {
     }
 
     private static let fields =
-        "id,name,mimeType,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey," +
+        "id,name,mimeType,parents,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey," +
         "capabilities(canDownload),shortcutDetails(targetId,targetMimeType,targetResourceKey)"
 }

@@ -10,21 +10,38 @@ final class ThumbnailService {
     private let memoryCache = NSCache<NSString, UIImage>()
     private let diskCacheDirectory: URL
     private var inFlightTasks: [String: Task<UIImage?, Never>] = [:]
+    private var failedLookups: [String: Date] = [:]
+    private var memoryWarningObserver: (any NSObjectProtocol)?
 
     // Concurrency control: Limit concurrent thumbnail network/decode operations to 4
     private let maxConcurrentFetches = 4
     private var activeFetchCount = 0
-    private var fetchWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Never>)] = []
+    private var fetchWaiters: [CheckedContinuation<Void, Never>] = []
 
     private init() {
-        memoryCache.countLimit = 400
-        memoryCache.totalCostLimit = 128 * 1_024 * 1_024 // 128 MB in-memory limit
+        memoryCache.countLimit = 250
+        memoryCache.totalCostLimit = 48 * 1_024 * 1_024 // 48 MB in-memory limit
 
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let directory = caches.appendingPathComponent("DriveTrackerThumbnails", isDirectory: true)
         self.diskCacheDirectory = directory
 
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleMemoryWarning()
+            }
+        }
+    }
+
+    private func handleMemoryWarning() {
+        memoryCache.removeAllObjects()
+        failedLookups.removeAll()
     }
 
     private func diskFileURL(for identityKey: String) -> URL {
@@ -60,7 +77,16 @@ final class ThumbnailService {
             return cached
         }
 
-        // 2. Deduplicate in-flight loading tasks for this identity
+        // 2. Check negative cache: if recently failed, avoid repeating network attempts
+        if let failedUntil = failedLookups[identity] {
+            if Date.now < failedUntil {
+                return nil
+            } else {
+                failedLookups.removeValue(forKey: identity)
+            }
+        }
+
+        // 3. Deduplicate in-flight loading tasks for this identity
         if let existingTask = inFlightTasks[identity] {
             return await existingTask.value
         }
@@ -101,15 +127,16 @@ final class ThumbnailService {
                 return nil
             }
 
-            // B. Fetch from Google Drive with concurrency gate & background decoding
             await self.acquireFetchSlot()
             defer {
                 self.releaseFetchSlot()
             }
 
-            guard !Task.isCancelled,
-                  let data = try? await api.thumbnailData(for: video)
-            else {
+            guard !Task.isCancelled else { return nil }
+
+            guard let data = try? await api.thumbnailData(for: video) else {
+                // Negative cache failure for 5 minutes to prevent hammering slots
+                self.failedLookups[identity] = Date.now.addingTimeInterval(300)
                 return nil
             }
 
@@ -136,7 +163,10 @@ final class ThumbnailService {
                 return (uiImage, jpegData)
             }.value
 
-            guard let (decodedImage, jpegData) = decodedResult else { return nil }
+            guard let (decodedImage, jpegData) = decodedResult else {
+                self.failedLookups[identity] = Date.now.addingTimeInterval(300)
+                return nil
+            }
 
             // Write to disk cache asynchronously
             Task.detached(priority: .background) {
@@ -157,35 +187,22 @@ final class ThumbnailService {
         return image
     }
 
-    /// Concurrency slot management
+    /// Concurrency slot management via non-throwing async queue.
+    /// Safe against task cancellation, no lost slots, no deadlocks.
     private func acquireFetchSlot() async {
         if activeFetchCount < maxConcurrentFetches {
             activeFetchCount += 1
             return
         }
-        let waiterID = UUID()
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                fetchWaiters.append((id: waiterID, continuation: continuation))
-            }
-        } onCancel: {
-            Task { @MainActor [weak self] in
-                self?.cancelWaiter(id: waiterID)
-            }
-        }
-    }
-
-    private func cancelWaiter(id: UUID) {
-        if let index = fetchWaiters.firstIndex(where: { $0.id == id }) {
-            let waiter = fetchWaiters.remove(at: index)
-            waiter.continuation.resume()
+        await withCheckedContinuation { continuation in
+            fetchWaiters.append(continuation)
         }
     }
 
     private func releaseFetchSlot() {
         if !fetchWaiters.isEmpty {
             let next = fetchWaiters.removeFirst()
-            next.continuation.resume()
+            next.resume()
         } else {
             activeFetchCount = max(0, activeFetchCount - 1)
         }
@@ -201,7 +218,8 @@ final class ThumbnailService {
         let eligible = videos.filter {
             $0.googleUserID == currentUserID &&
             !$0.isMissingFromDrive &&
-            memoryCachedImage(for: $0.identityKey) == nil
+            memoryCachedImage(for: $0.identityKey) == nil &&
+            (failedLookups[$0.identityKey] == nil || Date.now >= (failedLookups[$0.identityKey] ?? .distantPast))
         }
         guard !eligible.isEmpty else { return }
 
@@ -216,6 +234,7 @@ final class ThumbnailService {
 
     func clearCache() {
         memoryCache.removeAllObjects()
+        failedLookups.removeAll()
         inFlightTasks.removeAll()
         try? FileManager.default.removeItem(at: diskCacheDirectory)
         try? FileManager.default.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)

@@ -302,9 +302,9 @@ private struct TodayAccountRow: View {
 
         let completed = currentVideos.filter { $0.status == .uploaded }.count
         let hasPendingDownloads = currentVideos.contains { $0.status == .assigned || $0.status == .available }
-        let hasPhotos = allVideos.contains { $0.isPhoto && !$0.isMissingFromDrive }
-        let availablePhotos: [VideoAsset] = hasPhotos ? allVideos.filter { $0.isPhoto && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } : []
-        let downloadedPhotos: [VideoAsset] = hasPhotos ? allVideos.filter { $0.isPhoto && ($0.status == .downloaded || $0.status == .uploaded) && !$0.isMissingFromDrive }.sorted { ($0.uploadedAt ?? $0.downloadedAt ?? .distantPast) > ($1.uploadedAt ?? $1.downloadedAt ?? .distantPast) } : []
+        let hasPhotos = account.hasPhotos
+        let availablePhotosCount = account.availablePhotosCount
+        let downloadedPhotosCount = account.downloadedPhotosCount
 
         VStack(alignment: .leading, spacing: 14) {
             // Account Header: Full account name (zero ellipsis/dot-dot-dot), Quota progress, and Chevron
@@ -334,7 +334,7 @@ private struct TodayAccountRow: View {
 
                                 if hasPhotos {
                                     Text("•").font(.caption2).foregroundStyle(TrackerPalette.muted)
-                                    Text("\(availablePhotos.count) photos")
+                                    Text("\(availablePhotosCount) photos")
                                         .font(.caption2.weight(.medium))
                                         .foregroundStyle(TrackerPalette.accent)
                                 }
@@ -373,23 +373,25 @@ private struct TodayAccountRow: View {
             if hasPhotos {
                 Picker("Media Format", selection: $selectedMedia) {
                     Text("Videos (\(currentVideos.count))").tag(MediaTypeFilter.videos)
-                    Text("Photos (\(availablePhotos.count))").tag(MediaTypeFilter.photos)
+                    Text("Photos (\(availablePhotosCount))").tag(MediaTypeFilter.photos)
                 }
                 .pickerStyle(.segmented)
             }
 
             if hasPhotos && selectedMedia == .photos {
                 // Photos View: Clean adaptive grid, no cutoffs!
-                if availablePhotos.isEmpty && downloadedPhotos.isEmpty {
+                if availablePhotosCount == 0 && downloadedPhotosCount == 0 {
                     Text("No photos available in this folder.")
                         .font(.caption)
                         .foregroundStyle(TrackerPalette.muted)
                         .padding(.vertical, 8)
                 } else {
+                    let availablePhotos = account.availablePhotos
+                    let downloadedPhotos = account.downloadedPhotos
                     VStack(alignment: .leading, spacing: 12) {
                         if !availablePhotos.isEmpty {
                             HStack {
-                                Text("PHOTOS TO DOWNLOAD (\(availablePhotos.count))")
+                                Text("PHOTOS TO DOWNLOAD (\(availablePhotosCount))")
                                     .font(.system(size: 11, weight: .bold))
                                     .foregroundStyle(TrackerPalette.accent)
                                 Spacer()
@@ -413,7 +415,7 @@ private struct TodayAccountRow: View {
                         }
 
                         if !downloadedPhotos.isEmpty {
-                            Text("DOWNLOADED PHOTOS (\(downloadedPhotos.count))")
+                            Text("DOWNLOADED PHOTOS (\(downloadedPhotosCount))")
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(TrackerPalette.success)
                                 .padding(.top, 4)
@@ -807,7 +809,7 @@ private struct AccountTodaySection: View {
                         .foregroundStyle(TrackerPalette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
-                    Text("\(account.availableVideosList.count) unused videos  •  \(account.uploadedCount) completed" + (account.hasPhotos ? "  •  \(account.availablePhotos.count) photos" : ""))
+                    Text("\(account.availableVideosCount) unused videos  •  \(account.uploadedCount) completed" + (account.hasPhotos ? "  •  \(account.availablePhotosCount) photos" : ""))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(TrackerPalette.muted)
                 }
@@ -898,15 +900,15 @@ private struct AccountTodaySection: View {
 
                         Spacer()
 
-                        Text("\(account.availablePhotos.count) unused • \(account.downloadedPhotos.count) downloaded")
+                        Text("\(account.availablePhotosCount) unused • \(account.downloadedPhotosCount) downloaded")
                             .font(.caption.monospacedDigit().weight(.medium))
                             .foregroundStyle(TrackerPalette.muted)
                     }
 
-                    if !account.availablePhotos.isEmpty {
+                    if account.availablePhotosCount > 0 {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text("PHOTOS TO DOWNLOAD (\(account.availablePhotos.count))")
+                                Text("PHOTOS TO DOWNLOAD (\(account.availablePhotosCount))")
                                     .font(.system(size: 11, weight: .bold))
                                     .foregroundStyle(TrackerPalette.accent)
 
@@ -932,9 +934,9 @@ private struct AccountTodaySection: View {
                         }
                     }
 
-                    if !account.downloadedPhotos.isEmpty {
+                    if account.downloadedPhotosCount > 0 {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("DOWNLOADED PHOTOS (\(account.downloadedPhotos.count))")
+                            Text("DOWNLOADED PHOTOS (\(account.downloadedPhotosCount))")
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(TrackerPalette.success)
 
@@ -1018,8 +1020,8 @@ private struct ManualVideoPickerView: View {
                 if account.hasPhotos {
                     Section {
                         Picker("Media Format", selection: $mediaFilter) {
-                            Text("Videos (\(account.availableVideosList.count))").tag(MediaTypeFilter.videos)
-                            Text("Photos (\(account.availablePhotos.count))").tag(MediaTypeFilter.photos)
+                            Text("Videos (\(account.availableVideosCount))").tag(MediaTypeFilter.videos)
+                            Text("Photos (\(account.availablePhotosCount))").tag(MediaTypeFilter.photos)
                         }
                         .pickerStyle(.segmented)
                     }
