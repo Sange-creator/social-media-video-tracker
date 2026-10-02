@@ -16,7 +16,7 @@ struct DriveItem: Decodable, Identifiable, Sendable {
     let id: String
     let name: String
     let mimeType: String
-    let parents: [String]?
+    var parents: [String]? = nil
     let size: String?
     let md5Checksum: String?
     let modifiedTime: String?
