@@ -255,6 +255,14 @@ final class TikTokAccount {
         videos.filter { $0.isVideo && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }.count
     }
 
+    var downloadedPhotosCount: Int {
+        videos.filter { $0.isPhoto && ($0.status == .downloaded || $0.status == .uploaded) && !$0.isMissingFromDrive }.count
+    }
+
+    var downloadedVideosCount: Int {
+        videos.filter { $0.isVideo && ($0.status == .downloaded || $0.status == .uploaded) && !$0.isMissingFromDrive }.count
+    }
+
     var availablePhotos: [VideoAsset] {
         videos.filter { $0.isPhoto && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -456,7 +464,7 @@ final class VideoAsset {
     var status: VideoStatus {
         if uploadedAt != nil { return .uploaded }
         if downloadedAt != nil { return .downloaded }
-        if activeAssignment != nil { return .assigned }
+        if assignments.contains(where: \.isActive) { return .assigned }
         return .available
     }
 

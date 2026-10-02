@@ -147,11 +147,19 @@ final class DownloadCoordinator: NSObject, ObservableObject {
     private func incrementActiveDownloads() {
         activeDownloadCount += 1
         if backgroundTaskID == .invalid {
-            backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "VideoDownloads") { [weak self] in
+            var bgID: UIBackgroundTaskIdentifier = .invalid
+            bgID = UIApplication.shared.beginBackgroundTask(withName: "VideoDownloads") { [weak self] in
+                if bgID != .invalid {
+                    UIApplication.shared.endBackgroundTask(bgID)
+                }
                 Task { @MainActor [weak self] in
-                    self?.endBackgroundTask()
+                    guard let self else { return }
+                    if self.backgroundTaskID == bgID {
+                        self.backgroundTaskID = .invalid
+                    }
                 }
             }
+            backgroundTaskID = bgID
         }
     }
 
