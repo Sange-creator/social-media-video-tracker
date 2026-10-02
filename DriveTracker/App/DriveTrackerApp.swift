@@ -32,7 +32,7 @@ struct DriveTrackerApp: App {
         WindowGroup {
             switch containerLoad {
             case .success(let container):
-                RootView()
+                RootView(state: state)
                     .environmentObject(state)
                     .environmentObject(state.auth)
                     .modelContainer(container)
@@ -59,6 +59,7 @@ struct DriveTrackerApp: App {
                     break // RootView starts the foreground change monitor.
                 case .background:
                     guard case .success(let container) = containerLoad else { return }
+                    await state.syncDuringOffTime(context: container.mainContext)
                     await state.backupNow(context: container.mainContext)
                 default:
                     break
@@ -80,6 +81,24 @@ enum ModelContainerFactory {
     ])
 
     static func createContainer() throws -> ModelContainer {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-navigation-smoke-test") {
+            let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+            let context = container.mainContext
+            let account = TikTokAccount(googleUserID: "navigation-test", driveFolderID: "test-folder", folderName: "Navigation Test", dailyQuota: 3)
+            context.insert(account)
+            for index in 1...6 {
+                let video = VideoAsset(driveFileID: "test-\(index)", accountFolderID: account.driveFolderID, googleUserID: account.googleUserID,
+                                       name: "Video \(index).mp4", mimeType: "video/mp4", account: account)
+                context.insert(video)
+                if index <= 3 {
+                    context.insert(DailyAssignment(localDayKey: DayKey.value(for: .now), slot: index, account: account, video: video))
+                }
+            }
+            try context.save()
+            return container
+        }
+        #endif
         let fileManager = FileManager.default
         if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             try? fileManager.createDirectory(at: appSupport, withIntermediateDirectories: true)

@@ -49,6 +49,13 @@ final class TodayFeedTests: XCTestCase {
         }
     }
 
+    func testDownloadPercentageIncludesPartialDownloadsAndClampsInvalidProgress() {
+        XCTAssertEqual(TodayDownloadProgress.fraction(completed: 1, partials: [0.5], total: 3), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(TodayDownloadProgress.fraction(completed: 3, partials: [], total: 3), 1)
+        XCTAssertEqual(TodayDownloadProgress.fraction(completed: 0, partials: [.nan, -1, 2], total: 3), 1.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(TodayDownloadProgress.fraction(completed: 0, partials: [], total: 0), 0)
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = ModelContainerFactory.schema
         return try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))

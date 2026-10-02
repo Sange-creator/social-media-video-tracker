@@ -172,6 +172,7 @@ private struct TodayMediaRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     let video: VideoAsset
     @State private var showPreview = false
+    @State private var showReplacementPicker = false
     var body: some View {
         let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
         layout {
@@ -189,14 +190,19 @@ private struct TodayMediaRow: View {
             }
             Spacer(minLength: 0)
             TodayDownloadControl(video: video, downloads: state.downloads)
-            Menu { TodayMediaActions(video: video) } label: {
+            Menu { TodayMediaActions(video: video, chooseOther: { showReplacementPicker = true }) } label: {
                 Image(systemName: "ellipsis").frame(width: 44, height: 44)
             }
             .accessibilityLabel("Actions for \(video.name)")
         }
         .padding(.vertical, 4)
-        .contextMenu { TodayMediaActions(video: video) }
+        .contextMenu { TodayMediaActions(video: video, chooseOther: { showReplacementPicker = true }) }
         .sheet(isPresented: $showPreview) { VideoPreviewView(video: video) }
+        .sheet(isPresented: $showReplacementPicker) {
+            if let account = video.account, let assignment = video.activeAssignment {
+                ManualVideoPickerView(account: account, replacing: assignment)
+            }
+        }
     }
 }
 
@@ -204,14 +210,16 @@ private struct TodayMediaActions: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
+    let chooseOther: () -> Void
     var body: some View {
         if !video.uploadText.isEmpty {
             Button("Copy upload text", systemImage: "doc.on.clipboard") { state.copyUploadText(for: video) }
         }
         if video.status != .uploaded {
             Button("Mark completed", systemImage: "checkmark.circle") { state.markCompletedOutsideApp(video, context: context) }
-            if let assignment = video.activeAssignment {
-                Button("Replace suggestion", systemImage: "arrow.triangle.2.circlepath") { state.replace(assignment, context: context) }
+            if video.activeAssignment != nil && video.status == .assigned {
+                Button("Choose other video", systemImage: "arrow.triangle.2.circlepath", action: chooseOther)
+                    .disabled(state.isDownloading(video) || state.isSavingToPhotos(video))
             }
         } else {
             Button("Undo completion", systemImage: "arrow.uturn.backward") { state.undoUpload(video, context: context) }
@@ -233,7 +241,17 @@ private struct TodayDownloadControl: View {
                 ProgressView().accessibilityLabel("Saving to Photos")
             } else if let progress = downloads.progressByIdentity[video.identityKey] {
                 Button { state.cancelDownload(video) } label: {
-                    ProgressView(value: progress.fraction).frame(width: 36)
+                    VStack(spacing: 4) {
+                        let fraction = TodayDownloadProgress.clamped(progress.fraction)
+                        if progress.totalBytes > 0 {
+                            Text("\(Int(fraction * 100))%")
+                                .font(.caption.monospacedDigit())
+                            ProgressView(value: fraction).frame(width: 44)
+                        } else {
+                            ProgressView()
+                            Text("Downloading…").font(.caption2)
+                        }
+                    }
                 }.accessibilityLabel("Cancel download")
             } else if video.status == .uploaded {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(TrackerPalette.success)
@@ -276,8 +294,9 @@ private struct TodayAccountDetailView: View {
             if let group {
                 Section {
                     TodaySummary(completed: group.completed, quota: account.dailyQuota)
+                    TodayAccountDownloadProgress(videos: group.videos, quota: account.dailyQuota, downloads: state.downloads)
                     TodayAccountActions(account: account, hasPending: group.videos.contains { $0.status == .assigned })
-                    Button("Choose media", systemImage: "plus") { showManualPicker = true }
+                    Button("Help me choose another video", systemImage: "plus") { showManualPicker = true }
                     if group.videos.count < account.dailyQuota {
                         Label("\(account.dailyQuota - group.videos.count) more videos needed for today's target", systemImage: "info.circle")
                             .font(.subheadline).foregroundStyle(.secondary)
@@ -302,7 +321,7 @@ private struct TodayAccountDetailView: View {
         .background(TrackerPalette.canvas)
         .navigationTitle(account.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await state.sync(context: context) }
+        .refreshable { await state.sync(context: context, folderIDs: [account.driveFolderID]) }
         .sheet(isPresented: $showManualPicker) { ManualVideoPickerView(account: account) }
     }
 }
@@ -312,21 +331,29 @@ private struct ManualVideoPickerView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let account: TikTokAccount
+    var replacing: DailyAssignment? = nil
+    @Query private var media: [VideoAsset]
+
+    init(account: TikTokAccount, replacing: DailyAssignment? = nil) {
+        self.account = account
+        self.replacing = replacing
+        let userID = account.googleUserID, folderID = account.driveFolderID
+        _media = Query(filter: #Predicate<VideoAsset> {
+            $0.googleUserID == userID && $0.accountFolderID == folderID
+        })
+    }
 
     @State private var search = ""
     @State private var previewVideo: VideoAsset?
     @State private var mediaFilter: MediaTypeFilter = .videos
 
     private var availableItems: [VideoAsset] {
-        let baseList: [VideoAsset]
-        if account.hasPhotos && mediaFilter == .photos {
-            baseList = account.availablePhotos
-        } else {
-            baseList = account.availableVideosList
-        }
-        return baseList
+        let showPhotos = replacing == nil && account.hasPhotos && mediaFilter == .photos
+        return media
             .filter {
-                $0.status == .available &&
+                $0.modelContext != nil && !$0.isDeleted &&
+                (showPhotos ? $0.isPhoto : $0.isVideo) &&
+                ($0.status == .available || (replacing == nil && $0.status == .assigned)) &&
                 !$0.isMissingFromDrive &&
                 $0.canDownload &&
                 (search.isEmpty ||
@@ -350,7 +377,7 @@ private struct ManualVideoPickerView: View {
                             Text(account.displayName)
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(TrackerPalette.textPrimary)
-                            Text(account.hasPhotos
+                            Text(replacing != nil ? "Choose any available video to replace this suggestion. Search by video name or folder." : account.hasPhotos
                                 ? "Download any unused video or photo immediately without changing your daily schedule."
                                 : "Download any unused video immediately without changing your daily schedule.")
                                 .font(.caption)
@@ -361,7 +388,7 @@ private struct ManualVideoPickerView: View {
                     .listRowBackground(TrackerPalette.surface)
                 }
 
-                if account.hasPhotos {
+                if replacing == nil && account.hasPhotos {
                     Section {
                         Picker("Media Format", selection: $mediaFilter) {
                             Text("Videos (\(account.availableVideosList.count))").tag(MediaTypeFilter.videos)
@@ -372,10 +399,10 @@ private struct ManualVideoPickerView: View {
                     .listRowBackground(Color.clear)
                 }
 
-                let isPhotoSection = account.hasPhotos && mediaFilter == .photos
+                let isPhotoSection = replacing == nil && account.hasPhotos && mediaFilter == .photos
                 let sectionTitle = isPhotoSection
-                    ? "Unused Photos (\(availableItems.count))"
-                    : "Unused Videos (\(availableItems.count))"
+                    ? "Available Photos (\(availableItems.count))"
+                    : "Available Videos (\(availableItems.count))"
 
                 Section(sectionTitle) {
                     if availableItems.isEmpty {
@@ -428,57 +455,44 @@ private struct ManualVideoPickerView: View {
                                     }
                                     .padding(.vertical, 2)
                                 } else if state.isDownloading(video) {
-                                    let progress = state.downloads.progressByIdentity[video.identityKey]
-                                    let fraction = progress?.fraction ?? 0
-                                    let percent = Int(fraction * 100)
+                                    TodayPickerDownloadProgress(video: video, downloads: state.downloads)
+                                }
 
-                                    VStack(spacing: 6) {
-                                        HStack {
-                                            Text(fraction > 0 ? "Downloading \(percent)%" : "Downloading from Drive…")
-                                                .font(.caption2.weight(.bold))
-                                                .foregroundStyle(TrackerPalette.accent)
-                                            Spacer()
-                                            if let bytes = progress?.bytesWritten, let total = progress?.totalBytes, total > 0 {
-                                                Text("\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
-                                                    .font(.caption2.monospacedDigit())
-                                                    .foregroundStyle(TrackerPalette.muted)
+                                if let replacing {
+                                    Button("Choose this video", systemImage: "checkmark.circle") {
+                                        if state.replace(replacing, with: video, context: context) { dismiss() }
+                                    }
+                                    .buttonStyle(TrackerActionButtonStyle(kind: .primary))
+                                } else {
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            if state.isSavingToPhotos(video) {
+                                                // saving in progress
+                                            } else if state.isDownloading(video) {
+                                                state.cancelDownload(video)
+                                            } else {
+                                                state.startParallelDownload(video, context: context)
                                             }
+                                        } label: {
+                                            Label(
+                                                state.isSavingToPhotos(video) ? "Saving to Photos…" : (state.isDownloading(video) ? "Cancel Download" : "Download Now"),
+                                                systemImage: state.isSavingToPhotos(video) ? "arrow.down.circle" : (state.isDownloading(video) ? "xmark.circle.fill" : "arrow.down.circle.fill")
+                                            )
+                                            .frame(maxWidth: .infinity)
                                         }
-
-                                        ProgressView(value: fraction > 0 ? fraction : nil)
-                                            .tint(TrackerPalette.accent)
+                                        .buttonStyle(TrackerActionButtonStyle(kind: state.isDownloading(video) ? .secondary : .primary))
+                                        .disabled(state.isSavingToPhotos(video))
                                     }
-                                    .padding(.vertical, 2)
-                                }
 
-                                HStack(spacing: 10) {
                                     Button {
-                                        if state.isSavingToPhotos(video) {
-                                            // saving in progress
-                                        } else if state.isDownloading(video) {
-                                            state.cancelDownload(video)
-                                        } else {
-                                            state.startParallelDownload(video, context: context)
-                                        }
+                                        state.markCompletedOutsideApp(video, context: context)
                                     } label: {
-                                        Label(
-                                            state.isSavingToPhotos(video) ? "Saving to Photos…" : (state.isDownloading(video) ? "Cancel Download" : "Download Now"),
-                                            systemImage: state.isSavingToPhotos(video) ? "arrow.down.circle" : (state.isDownloading(video) ? "xmark.circle.fill" : "arrow.down.circle.fill")
-                                        )
-                                        .frame(maxWidth: .infinity)
+                                        Label("Already Downloaded", systemImage: "checkmark.circle.fill")
+                                            .frame(maxWidth: .infinity)
                                     }
-                                    .buttonStyle(TrackerActionButtonStyle(kind: state.isDownloading(video) ? .secondary : .primary))
-                                    .disabled(state.isSavingToPhotos(video))
+                                    .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
+                                    .disabled(state.isDownloading(video))
                                 }
-
-                                Button {
-                                    state.markCompletedOutsideApp(video, context: context)
-                                } label: {
-                                    Label("Already Downloaded", systemImage: "checkmark.circle.fill")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(TrackerActionButtonStyle(kind: .secondary))
-                                .disabled(state.isDownloading(video))
                             }
                             .padding(.vertical, 6)
                             .listRowBackground(TrackerPalette.surface)
@@ -487,7 +501,7 @@ private struct ManualVideoPickerView: View {
                 }
             }
             .trackerListStyle()
-            .navigationTitle(account.hasPhotos ? (mediaFilter == .photos ? "Choose a Photo" : "Choose a Video") : "Choose a Video")
+            .navigationTitle(replacing != nil ? "Choose other video" : "Help me choose a video")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: account.hasPhotos && mediaFilter == .photos ? "Search photos or folders" : "Search videos or folders")
             .toolbar {
@@ -550,5 +564,69 @@ private struct ManualVideoPickerView: View {
                 VideoPreviewView(video: video)
             }
         }
+    }
+}
+
+
+enum TodayDownloadProgress {
+    static func clamped(_ fraction: Double) -> Double {
+        fraction.isFinite ? min(1, max(0, fraction)) : 0
+    }
+
+    static func fraction(completed: Int, partials: [Double], total: Int) -> Double {
+        guard total > 0 else { return 0 }
+        return clamped((Double(completed) + partials.reduce(0) { $0 + clamped($1) }) / Double(total))
+    }
+}
+
+private struct TodayAccountDownloadProgress: View {
+    let videos: [VideoAsset]
+    let quota: Int
+    @ObservedObject var downloads: DownloadCoordinator
+
+    var body: some View {
+        let completed = videos.filter { $0.downloadedAt != nil }.count
+        let partials = videos.filter { $0.downloadedAt == nil }.compactMap {
+            downloads.progressByIdentity[$0.identityKey]?.fraction
+        }
+        let total = max(quota, videos.count)
+        let fraction = TodayDownloadProgress.fraction(completed: completed, partials: partials, total: total)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Today's downloads")
+                Spacer()
+                Text("\(Int(fraction * 100))%")
+                    .monospacedDigit()
+            }
+            ProgressView(value: fraction).tint(TrackerPalette.accent)
+            Text("\(completed) of \(total) videos downloaded")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+
+private struct TodayPickerDownloadProgress: View {
+    let video: VideoAsset
+    @ObservedObject var downloads: DownloadCoordinator
+
+    var body: some View {
+        let progress = downloads.progressByIdentity[video.identityKey]
+        let fraction = TodayDownloadProgress.clamped(progress?.fraction ?? 0)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(progress?.totalBytes ?? 0 > 0 ? "Downloading \(Int(fraction * 100))%" : "Downloading from Drive…")
+                    .font(.caption2.weight(.bold)).foregroundStyle(TrackerPalette.accent)
+                Spacer()
+                if let progress, progress.totalBytes > 0 {
+                    Text("\(ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file))")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(TrackerPalette.muted)
+                }
+            }
+            if let progress, progress.totalBytes > 0 { ProgressView(value: fraction) }
+            else { ProgressView() }
+        }
+        .padding(.vertical, 2)
     }
 }

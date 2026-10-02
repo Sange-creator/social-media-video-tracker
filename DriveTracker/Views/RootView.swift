@@ -4,7 +4,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var context
-    @EnvironmentObject private var state: AppState
+    let state: AppState
     @EnvironmentObject private var auth: GoogleAuthService
     @Query private var accounts: [TikTokAccount]
 
@@ -21,40 +21,8 @@ struct RootView: View {
                 state.startDriveChangeMonitor(context: context)
             }
             .overlay(alignment: .bottom) {
-                Group {
-                    if let error = state.errorMessage {
-                        ImportantMessageBanner(message: error)
-                    } else if let message = state.toastMessage {
-                        ToastMessageBanner(message: message)
-                    } else if let message = state.statusMessage {
-                        ToastMessageBanner(message: message)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, hasConfiguredAccount ? 72 : 16)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.errorMessage)
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.toastMessage)
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.statusMessage)
-                .allowsHitTesting(false)
-            }
-            .task(id: state.errorMessage) {
-                guard let message = state.errorMessage else { return }
-                try? await Task.sleep(for: .seconds(6))
-                guard !Task.isCancelled, state.errorMessage == message else { return }
-                state.errorMessage = nil
-            }
-            .task(id: state.toastMessage) {
-                guard let message = state.toastMessage else { return }
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled, state.toastMessage == message else { return }
-                state.toastMessage = nil
-            }
-            .task(id: state.statusMessage) {
-                guard let message = state.statusMessage else { return }
-                try? await Task.sleep(for: .seconds(2.5))
-                guard !Task.isCancelled, state.statusMessage == message else { return }
-                state.statusMessage = nil
+                RootStatusOverlay(hasConfiguredAccount: hasConfiguredAccount)
+                    .allowsHitTesting(false)
             }
             .tint(TrackerPalette.accent)
     }
@@ -182,7 +150,87 @@ struct MainTabView: View {
             AnalyticsView().tabItem { Label("Analytics", systemImage: "chart.bar.xaxis") }.tag(4)
             SettingsView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(5)
         }
-        .toolbarBackground(TrackerPalette.surface, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
+        .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack(spacing: 0) {
+                sectionButton("Today", symbol: "calendar", tab: 0)
+                sectionButton("Clipboard", symbol: "doc.on.clipboard.fill", tab: 1)
+                sectionButton("Library", symbol: "rectangle.stack", tab: 2)
+                sectionButton("Accounts", symbol: "person.2", tab: 3)
+                Menu {
+                    Button("Analytics", systemImage: "chart.bar.xaxis") { selectedTab = 4 }
+                    Button("Settings", systemImage: "gearshape") { selectedTab = 5 }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "ellipsis").font(.system(size: 20))
+                        Text(selectedTab == 4 ? "Analytics" : selectedTab == 5 ? "Settings" : "More").font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .accessibilityLabel("More sections")
+                .foregroundStyle(selectedTab >= 4 ? TrackerPalette.accent : TrackerPalette.muted)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .background(TrackerPalette.surface)
+        }
+    }
+
+    private func sectionButton(_ title: String, symbol: String, tab: Int) -> some View {
+        Button { selectedTab = tab } label: {
+            VStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 20))
+                Text(title).font(.caption2)
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .foregroundStyle(selectedTab == tab ? TrackerPalette.accent : TrackerPalette.muted)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selectedTab == tab ? [.isSelected] : [])
+        .accessibilityIdentifier("section-\(tab)")
+    }
+}
+
+private struct RootStatusOverlay: View {
+    let hasConfiguredAccount: Bool
+    @EnvironmentObject private var state: AppState
+    var body: some View {
+        Group {
+            if let error = state.errorMessage {
+                ImportantMessageBanner(message: error)
+            } else if let message = state.toastMessage {
+                ToastMessageBanner(message: message)
+            } else if let message = state.statusMessage {
+                ToastMessageBanner(message: message)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, hasConfiguredAccount ? 72 : 16)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.errorMessage)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.toastMessage)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.statusMessage)
+        .allowsHitTesting(false)
+        .task(id: state.errorMessage) {
+            guard let message = state.errorMessage else { return }
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled, state.errorMessage == message else { return }
+            state.errorMessage = nil
+        }
+        .task(id: state.toastMessage) {
+            guard let message = state.toastMessage else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, state.toastMessage == message else { return }
+            state.toastMessage = nil
+        }
+        .task(id: state.statusMessage) {
+            guard let message = state.statusMessage else { return }
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled, state.statusMessage == message else { return }
+            state.statusMessage = nil
+        }
     }
 }

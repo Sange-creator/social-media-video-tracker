@@ -62,6 +62,13 @@ struct AssignmentEngine {
             }
         }
         let needed = max(0, account.dailyQuota - outstanding.count - completedToday)
+        guard needed > 0 else {
+            if context.hasChanges {
+                account.updatedAt = date
+                try context.save()
+            }
+            return AssignmentSummary(added: 0, outstanding: outstanding.count, shortage: 0)
+        }
         let candidates = account.videos.filter {
             $0.isVideo && $0.status == .available && !$0.isMissingFromDrive && $0.canDownload
         }
@@ -179,7 +186,7 @@ struct AssignmentEngine {
         return assignment
     }
 
-    func replace(_ assignment: DailyAssignment, context: ModelContext) throws -> Bool {
+    func replace(_ assignment: DailyAssignment, with selectedVideo: VideoAsset? = nil, context: ModelContext) throws -> Bool {
         guard
             assignment.isActive,
             let oldVideo = assignment.video,
@@ -196,7 +203,14 @@ struct AssignmentEngine {
             !$0.isMissingFromDrive &&
             $0.canDownload
         }
-        guard let replacement = replacements.randomElement() else { return false }
+        let replacement: VideoAsset
+        if let selectedVideo {
+            guard replacements.contains(where: { $0.id == selectedVideo.id }) else { return false }
+            replacement = selectedVideo
+        } else {
+            guard let random = replacements.randomElement() else { return false }
+            replacement = random
+        }
 
         assignment.isActive = false
         assignment.updatedAt = .now

@@ -159,7 +159,7 @@ private struct AccountLibraryView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    Task { await state.sync(context: context, announce: false) }
+                    Task { await state.sync(context: context, announce: false, folderIDs: [account.driveFolderID]) }
                 } label: {
                     if state.isWorking || state.isSyncing {
                         ProgressView()
@@ -178,7 +178,7 @@ private struct AccountLibraryView: View {
             VideoPreviewView(video: video)
         }
         .refreshable {
-            await state.sync(context: context, announce: false)
+            await state.sync(context: context, announce: false, folderIDs: [account.driveFolderID])
         }
         .task {
             ThumbnailService.shared.prefetchThumbnails(

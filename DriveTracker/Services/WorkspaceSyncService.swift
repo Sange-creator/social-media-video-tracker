@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 nonisolated struct WorkspaceMediaRecord: Decodable, Sendable {
     let id: String
@@ -176,5 +177,20 @@ actor WorkspaceSyncService {
             let message = String(data: data, encoding: .utf8) ?? "Workspace request failed"
             throw NSError(domain: "WorkspaceSync", code: (response as? HTTPURLResponse)?.statusCode ?? -1, userInfo: [NSLocalizedDescriptionKey: message])
         }
+    }
+}
+
+
+extension WorkspaceSyncDelta {
+    @MainActor
+    func affectedVideos(for userID: String, context: ModelContext) throws -> [VideoAsset] {
+        let driveIDs = changes.map(\.driveFileId)
+        let mediaIDs = (assignments ?? []).compactMap(\.mediaId).map { Optional($0) }
+        // Empty changes must never fault in the entire saved library.
+        guard !driveIDs.isEmpty || !mediaIDs.isEmpty else { return [] }
+        return try context.fetch(FetchDescriptor<VideoAsset>(predicate: #Predicate {
+            $0.googleUserID == userID &&
+            (driveIDs.contains($0.driveFileID) || mediaIDs.contains($0.workspaceMediaID))
+        }))
     }
 }

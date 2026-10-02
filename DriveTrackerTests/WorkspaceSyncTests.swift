@@ -43,6 +43,31 @@ final class WorkspaceSyncTests: XCTestCase {
         XCTAssertEqual(delta.assignments?.first?.state, "completed")
     }
 
+    func testWorkspaceDeltaLoadsOnlyChangedVideosForTheCurrentUser() throws {
+        let container = try ModelContainer(for: ModelContainerFactory.schema,
+            configurations: ModelConfiguration(schema: ModelContainerFactory.schema, isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        for (user, file, workspaceID) in [("me", "changed", "media-one"), ("me", "assigned", "media-two"),
+                                           ("me", "untouched", "media-three"), ("other", "changed", "media-four")] {
+            let video = VideoAsset(driveFileID: file, accountFolderID: "folder", googleUserID: user,
+                                   name: "Video.mp4", mimeType: "video/mp4")
+            video.workspaceMediaID = workspaceID
+            context.insert(video)
+        }
+        try context.save()
+        let empty = WorkspaceSyncDelta(cursor: "next", changes: [], assignments: [])
+        XCTAssertTrue(try empty.affectedVideos(for: "me", context: context).isEmpty)
+        let delta = WorkspaceSyncDelta(cursor: "next",
+            changes: [WorkspaceMediaRecord(id: "media-one", driveFileId: "changed", uploadText: "New", revision: 1)],
+            assignments: [WorkspaceAssignmentRecord(id: "assignment", accountId: nil, mediaId: "media-two", state: "completed", completedAt: nil)])
+        XCTAssertEqual(Set(try delta.affectedVideos(for: "me", context: context).map(\.driveFileID)), ["changed", "assigned"])
+        let mediaOnly = WorkspaceSyncDelta(cursor: "next", changes: delta.changes, assignments: [])
+        XCTAssertEqual(try mediaOnly.affectedVideos(for: "me", context: context).map(\.driveFileID), ["changed"])
+        let assignmentsOnly = WorkspaceSyncDelta(cursor: "next", changes: [], assignments: delta.assignments)
+        XCTAssertEqual(try assignmentsOnly.affectedVideos(for: "me", context: context).map(\.driveFileID), ["assigned"])
+        XCTAssertFalse(context.hasChanges)
+    }
+
     func testOutboxItemSerialization() throws {
         let item = WorkspaceOutboxItem(
             id: UUID(),

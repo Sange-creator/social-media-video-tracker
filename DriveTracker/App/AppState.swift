@@ -67,11 +67,10 @@ final class AppState: ObservableObject {
     private var analyticsTask: Task<Void, Never>?
     private var isBackingUp = false
     private var backupRequestedWhileRunning = false
-    private var startupMaintenanceTask: Task<Void, Never>?
     private var changesMonitoringTask: Task<Void, Never>?
     private var isCheckingForChanges = false
     private var driveSyncTask: Task<Bool, Never>?
-    private var driveSyncRequestedWhileRunning = false
+    private var isPerformingIdleRepair = false
     private let driveChangeTracker: DriveChangeTracker
     private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
     private var copyQueueSyncTaskKey: String?
@@ -148,13 +147,11 @@ final class AppState: ObservableObject {
                 applyCopyQueueConfiguration(from: backup)
                 statusMessage = "Tracking history restored from Drive."
             }
-            let hasSources = try activateDriveSourceConfiguration(
+            _ = try activateDriveSourceConfiguration(
                 for: userID,
                 context: context
             )
             try ensureToday(context: context)
-            await syncWorkspaceMedia(context: context)
-            if hasSources { scheduleStartupMaintenance(context: context) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -176,15 +173,12 @@ final class AppState: ObservableObject {
                 applyCopyQueueConfiguration(from: backup)
                 statusMessage = "Tracking history restored from Drive."
             }
-            let hasSources = try activateDriveSourceConfiguration(
+            _ = try activateDriveSourceConfiguration(
                 for: userID,
                 context: context
             )
             try ensureToday(context: context)
             scheduleAnalyticsRefresh(context: context)
-            if hasSources {
-                scheduleStartupMaintenance(context: context)
-            }
         }
     }
 
@@ -203,15 +197,12 @@ final class AppState: ObservableObject {
                 rootResourceKey = backup.rootResourceKey
                 applyCopyQueueConfiguration(from: backup)
             }
-            let hasSources = try activateDriveSourceConfiguration(
+            _ = try activateDriveSourceConfiguration(
                 for: userID,
                 context: context
             )
             try ensureToday(context: context)
             scheduleAnalyticsRefresh(context: context)
-            if hasSources {
-                scheduleStartupMaintenance(context: context)
-            }
         }
     }
 
@@ -329,10 +320,12 @@ final class AppState: ObservableObject {
     /// is preserved. A sync writes only when the reconciliation changed data,
     /// which keeps SwiftData-backed screens from needlessly reloading.
     @discardableResult
-    func sync(context: ModelContext, announce: Bool = false) async -> Bool {
+    func sync(context: ModelContext, announce: Bool = false, folderIDs: Set<String>? = nil) async -> Bool {
+        if let folderIDs, folderIDs.isEmpty { return true }
         if let task = driveSyncTask {
-            driveSyncRequestedWhileRunning = true
-            return await task.value
+            _ = await task.value
+            guard !Task.isCancelled else { return false }
+            return await sync(context: context, announce: announce, folderIDs: folderIDs)
         }
         let task = Task { @MainActor in
             self.isSyncing = true
@@ -340,18 +333,13 @@ final class AppState: ObservableObject {
                 self.isSyncing = false
                 self.driveSyncTask = nil
             }
-            var succeeded = false
-            repeat {
-                self.driveSyncRequestedWhileRunning = false
-                succeeded = await self.reconcileDrive(context: context, announce: announce)
-            } while self.driveSyncRequestedWhileRunning && !Task.isCancelled
-            return succeeded
+            return await self.reconcileDrive(context: context, announce: announce, folderIDs: folderIDs)
         }
         driveSyncTask = task
         return await task.value
     }
 
-    private func reconcileDrive(context: ModelContext, announce: Bool) async -> Bool {
+    private func reconcileDrive(context: ModelContext, announce: Bool, folderIDs: Set<String>?) async -> Bool {
         if announce { errorMessage = nil }
         do {
             guard let userID = auth.userID else { throw GoogleAuthError.notSignedIn }
@@ -359,7 +347,7 @@ final class AppState: ObservableObject {
                 .filter { $0.googleUserID == userID && $0.isEnabled }
             guard !sources.isEmpty else { throw DriveLinkError.empty }
             let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
-                .filter { $0.googleUserID == userID && $0.isConfigured }
+                .filter { $0.googleUserID == userID && $0.isConfigured && (folderIDs?.contains($0.driveFolderID) ?? true) }
             let accountsBySource = Dictionary(grouping: accounts, by: \.sourceID)
             var videoCount = 0
             var newVideoCount = 0
@@ -418,39 +406,96 @@ final class AppState: ObservableObject {
             key: changesTokenKey(for: userID),
             startToken: { try await self.api.startPageToken() },
             changes: { try await self.api.listChanges(pageToken: $0) },
-            reconcile: { await self.sync(context: context) },
+            reconcile: { changes in
+                do {
+                    let folders = try await self.affectedDriveFolders(changes, userID: userID, context: context)
+                    return await self.sync(context: context, folderIDs: folders)
+                } catch { return false }
+            },
             isCurrentUser: { self.auth.userID == userID }
         )
     }
 
-    /// Foreground monitor for lightweight Drive change checks. A full
-    /// reconciliation is retained as a slow repair path rather than repeating
-    /// every few seconds while the user scrolls.
+    /// Only changed folder trees are scanned during foreground use.
     func startDriveChangeMonitor(context: ModelContext) {
+        if isPerformingIdleRepair { driveSyncTask?.cancel() }
         changesMonitoringTask?.cancel()
         changesMonitoringTask = Task(priority: .utility) { [weak self] in
-            var checkCount = 0
+            var checks = 0
             while !Task.isCancelled {
-                guard !Task.isCancelled, let self else { return }
-                checkCount += 1
-                await self.checkForDriveChanges(context: context)
-                // Repair missed notifications without constantly walking every
-                // nested folder. Normal changes trigger their own immediate sync.
-                if checkCount % 60 == 0 {
-                    await self.sync(context: context, announce: false)
-                }
-                await self.syncWorkspaceMedia(context: context)
+                // Show cached screens before starting any network checks.
                 do { try await Task.sleep(for: .seconds(5)) }
                 catch { return }
+                guard !Task.isCancelled, let self else { return }
+                await self.checkForDriveChanges(context: context)
+                checks += 1
+                // The shared workspace has its own delta cursor. Poll it less
+                // often, and never bootstrap its entire library on app open.
+                if checks.isMultiple(of: 12) {
+                    await self.syncWorkspaceMedia(context: context)
+                }
             }
         }
+    }
+
+    private func affectedDriveFolders(_ changes: [DriveChange], userID: String, context: ModelContext) async throws -> Set<String> {
+        let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+            .filter { $0.googleUserID == userID && $0.isConfigured }
+        let roots = Set(accounts.map(\.driveFolderID))
+        var affected = Set<String>()
+        let changedIDs = Set(changes.compactMap(\.fileId))
+        for root in roots {
+            let savedFolders = Set(defaults.stringArray(forKey: "DriveTracker.folderMembers.\(userID).\(root)") ?? [])
+            if !savedFolders.isDisjoint(with: changedIDs) { affected.insert(root) }
+        }
+        // Old memberships matter for deletes and moves out of a tracked folder.
+        for account in accounts where account.videos.contains(where: { changedIDs.contains($0.driveFileID) }) {
+            affected.insert(account.driveFolderID)
+        }
+        var parentsByID: [String: [String]] = [:]
+        for change in changes {
+            guard let id = change.fileId else { continue }
+            if roots.contains(id) { affected.insert(id) }
+            guard change.removed != true, let file = change.file else { continue }
+            var pending = file.parents ?? []
+            var visited = Set<String>()
+            while let parent = pending.popLast() {
+                guard visited.insert(parent).inserted else { continue }
+                if roots.contains(parent) { affected.insert(parent) }
+                if let cached = parentsByID[parent] { pending += cached; continue }
+                do {
+                    let item = try await api.item(id: parent)
+                    parentsByID[parent] = item.parents ?? []
+                    pending += item.parents ?? []
+                } catch DriveAPIError.http(let status, _) where status == 403 || status == 404 {
+                    // Drive can report changes with an inaccessible ancestor
+                    // outside the granted tree. Do not block other folders.
+                    parentsByID[parent] = []
+                }
+            }
+        }
+        return affected
+    }
+
+    /// At most two catch-up scans per day, only after leaving the app.
+    func syncDuringOffTime(context: ModelContext) async {
+        guard auth.isSignedIn, let userID = auth.userID, UIApplication.shared.applicationState == .background else { return }
+        let key = "DriveTracker.lastIdleRepair.\(userID)"
+        if let last = defaults.object(forKey: key) as? Date, Date.now.timeIntervalSince(last) < 43_200 { return }
+        defaults.set(Date.now, forKey: key)
+        isPerformingIdleRepair = true
+        defer { isPerformingIdleRepair = false }
+        let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Drive idle sync") { [weak self] in
+            self?.driveSyncTask?.cancel()
+        }
+        defer { if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) } }
+        await sync(context: context)
     }
 
     func stopDriveChangeMonitor() {
         changesMonitoringTask?.cancel()
         changesMonitoringTask = nil
-        startupMaintenanceTask?.cancel()
-        driveSyncTask?.cancel()
+        if !isPerformingIdleRepair { driveSyncTask?.cancel() }
     }
 
     /// Performs an on-demand foreground refresh when requested.
@@ -460,8 +505,7 @@ final class AppState: ObservableObject {
             let sourceCount = try? context.fetchCount(FetchDescriptor<DriveSource>()),
             sourceCount > 0
         else { return }
-        lastAutomaticSyncAttempt = .now
-        await sync(context: context, announce: false)
+        await checkForDriveChanges(context: context)
     }
 
     func ensureToday(context: ModelContext) throws {
@@ -488,17 +532,20 @@ final class AppState: ObservableObject {
         Task { await scheduleDownloadNotifications(context: context) }
     }
 
-    func replace(_ assignment: DailyAssignment, context: ModelContext) {
+    @discardableResult
+    func replace(_ assignment: DailyAssignment, with video: VideoAsset? = nil, context: ModelContext) -> Bool {
         do {
-            if try assignmentEngine.replace(assignment, context: context) {
+            if try assignmentEngine.replace(assignment, with: video, context: context) {
                 statusMessage = "A new video was selected."
                 scheduleBackup(context: context)
+                return true
             } else {
                 errorMessage = "No unused replacement video is available."
             }
         } catch {
             errorMessage = error.localizedDescription
         }
+        return false
     }
 
     func shuffleAllSuggestions(context: ModelContext) {
@@ -936,6 +983,10 @@ final class AppState: ObservableObject {
         needsFullWorkspaceRefresh = needsFullWorkspaceRefresh || fullRefresh
         guard !isSyncingWorkspace, let userID = auth.userID,
               await workspaceSync.isConfigured else { return }
+        let cursorKey = "\(Keys.workspaceDeltaCursor).\(userID)"
+        let savedCursor = defaults.string(forKey: cursorKey)
+        if UIApplication.shared.applicationState == .active, !fullRefresh,
+           savedCursor == nil || needsFullWorkspaceRefresh { return }
         let readFull = needsFullWorkspaceRefresh
         needsFullWorkspaceRefresh = false
         isSyncingWorkspace = true
@@ -943,15 +994,14 @@ final class AppState: ObservableObject {
         do {
             await drainWorkspaceOutbox()
 
-            let cursorKey = "\(Keys.workspaceDeltaCursor).\(userID)"
-            let cursor = readFull ? nil : defaults.string(forKey: cursorKey)
+            let cursor = readFull ? nil : savedCursor
             let delta = try await workspaceSync.syncDeltas(since: cursor, auth: auth)
             guard auth.userID == userID, !Task.isCancelled else { return }
 
             let remoteByDriveID = Dictionary(delta.changes.map { ($0.driveFileId, $0) }, uniquingKeysWith: { first, _ in first })
-            let videos = try context.fetch(FetchDescriptor<VideoAsset>())
+            let videos = try delta.affectedVideos(for: userID, context: context)
             var changed = false
-            for video in videos where video.googleUserID == auth.userID {
+            for video in videos {
                 guard let remote = remoteByDriveID[video.driveFileID] else { continue }
                 if video.workspaceMediaID != remote.id {
                     video.workspaceMediaID = remote.id
@@ -1504,8 +1554,7 @@ final class AppState: ObservableObject {
             // Keep the hidden recovery metadata in sync with the visible video
             // backup, so a complete manual backup contains both layers.
             await backupNow(context: context)
-            // Immediately sync with Drive so all uploaded files and folder structures are registered
-            await sync(context: context, announce: false)
+            // Backup uploads are outside the tracked folder trees.
             statusMessage = "Backed up \(backedUpCount) video\(backedUpCount == 1 ? "" : "s") to Backup Videos."
         } catch is CancellationError {
             statusMessage = "Video backup canceled."
@@ -1657,13 +1706,15 @@ final class AppState: ObservableObject {
 
     private func purgeLegacyDemoData(context: ModelContext) {
         do {
-            let demoAccounts = try context.fetch(FetchDescriptor<TikTokAccount>())
-                .filter { $0.googleUserID == "demo-user" }
+            let demoAccounts = try context.fetch(FetchDescriptor<TikTokAccount>(
+                predicate: #Predicate { $0.googleUserID == "demo-user" }
+            ))
             for account in demoAccounts {
                 deleteAccount(accountID: account.id, context: context)
             }
-            let orphanedDemoVideos = try context.fetch(FetchDescriptor<VideoAsset>())
-                .filter { $0.googleUserID == "demo-user" && $0.account == nil }
+            let orphanedDemoVideos = try context.fetch(FetchDescriptor<VideoAsset>(
+                predicate: #Predicate { $0.googleUserID == "demo-user" }
+            )).filter { $0.account == nil }
             for video in orphanedDemoVideos {
                 context.delete(video)
             }
@@ -1818,6 +1869,7 @@ final class AppState: ObservableObject {
             account: account,
             context: context
         )
+        defaults.set(Array(result.folderIDs), forKey: "DriveTracker.folderMembers.\(account.googleUserID).\(account.driveFolderID)")
         if source.lastSyncedAt.map({ Date.now.timeIntervalSince($0) >= 300 }) ?? true {
             source.lastSyncedAt = .now
             try context.save()
@@ -1889,15 +1941,6 @@ final class AppState: ObservableObject {
             }
         }
         if changed { try? context.save() }
-    }
-
-    private func scheduleStartupMaintenance(context: ModelContext) {
-        startupMaintenanceTask?.cancel()
-        startupMaintenanceTask = Task(priority: .utility) { [weak self] in
-            await Task.yield()
-            guard !Task.isCancelled, let self else { return }
-            await self.sync(context: context)
-        }
     }
 
     private func verifyOriginalFile(video: VideoAsset, localURL: URL) async throws {

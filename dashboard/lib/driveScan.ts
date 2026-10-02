@@ -15,7 +15,7 @@ type DriveChild = Omit<ScannedDriveFile, 'folderPath'>;
 
 // A complete scan is required before declaring anything missing. Pagination or
 // permission failures reject the scan so a partial response cannot hide files.
-export async function scanDriveFolder(token: string, folderId: string, folderName: string): Promise<ScannedDriveFile[]> {
+export async function scanDriveFolder(token: string, folderId: string, folderName: string, visitedFolders?: Set<string>): Promise<ScannedDriveFile[]> {
   const found: ScannedDriveFile[] = [];
   const visited = new Set<string>();
   const pending = [{ id: folderId, path: folderName }];
@@ -23,6 +23,7 @@ export async function scanDriveFolder(token: string, folderId: string, folderNam
     const folder = pending.pop()!;
     if (visited.has(folder.id)) continue;
     visited.add(folder.id);
+    visitedFolders?.add(folder.id);
     let pageToken: string | undefined;
     do {
       const url = new URL('https://www.googleapis.com/drive/v3/files');

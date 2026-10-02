@@ -5,6 +5,7 @@ struct DriveSyncResult: Equatable {
     let accountsFound: Int
     let videosFound: Int
     let newVideos: Int
+    var folderIDs: Set<String> = []
 }
 
 @MainActor
@@ -198,7 +199,8 @@ final class DriveSyncService {
         return DriveSyncResult(
             accountsFound: 1,
             videosFound: locatedVideos.count,
-            newVideos: newVideos
+            newVideos: newVideos,
+            folderIDs: visitedFolders
         )
     }
 

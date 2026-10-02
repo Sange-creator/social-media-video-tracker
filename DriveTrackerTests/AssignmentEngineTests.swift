@@ -289,6 +289,21 @@ final class AssignmentEngineTests: XCTestCase {
         XCTAssertEqual(account.videos.filter { $0.status == .available }.count, 6)
     }
 
+    func testReplacementUsesChosenVideoAndPreservesTheOtherSlots() throws {
+        let account = makeAccount(videoCount: 8, quota: 3)
+        _ = try engine.ensureAssignments(for: account, context: context)
+        let old = try XCTUnwrap(account.videos.first { $0.status == .assigned })
+        let assignment = try XCTUnwrap(old.activeAssignment)
+        let selected = try XCTUnwrap(account.videos.first { $0.status == .available })
+        let otherIDs = Set(account.videos.filter { $0.status == .assigned && $0.id != old.id }.map(\.id))
+        XCTAssertTrue(try engine.replace(assignment, with: selected, context: context))
+        XCTAssertEqual(selected.activeAssignment?.slot, assignment.slot)
+        XCTAssertEqual(old.status, .available)
+        XCTAssertEqual(Set(account.videos.filter { $0.status == .assigned && $0.id != selected.id }.map(\.id)), otherIDs)
+        let foreign = makeAccount(videoCount: 1, quota: 1)
+        XCTAssertFalse(try engine.replace(try XCTUnwrap(selected.activeAssignment), with: foreign.videos[0], context: context))
+    }
+
     private func makeAccount(videoCount: Int, quota: Int) -> TikTokAccount {
         let account = TikTokAccount(
             googleUserID: "test-user",

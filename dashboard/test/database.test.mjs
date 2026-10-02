@@ -11,7 +11,7 @@ test.before(async()=>{
   await db.exec(`create schema auth; create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     create role anon; create role authenticated; create role service_role bypassrls; create publication supabase_realtime;`);
-  for(const migration of ['001_connected_workspace.sql','002_sync_reliability.sql'])
+  for(const migration of ['001_connected_workspace.sql','002_sync_reliability.sql','003_folder_scoped_sync.sql'])
     await db.exec(await readFile(new URL(`../supabase/migrations/${migration}`,import.meta.url),'utf8'));
   await db.exec(`grant usage on schema public,auth to authenticated; grant select,insert,update,delete on all tables in schema public to authenticated;
     grant usage,select on all sequences in schema public to authenticated;
@@ -81,4 +81,17 @@ test('Missing files lose live access paths while metadata and history remain',as
   assert.equal((await db.query('select count(*)::int as n from public.media_access_paths')).rows[0].n,0);
   assert.equal((await db.query('select count(*)::int as n from public.media_items')).rows[0].n,1);
   assert.equal((await db.query('select count(*)::int as n from public.assignments')).rows[0].n,1);
+});
+
+test('Unchanged connections wait twelve hours between catch-up checks', async()=>{
+  await db.exec("update public.sync_jobs set state='completed';update public.drive_connections set last_sync_at=clock_timestamp()-interval '1 hour',sync_requested_at=null;select public.enqueue_drive_repairs();");
+  assert.equal((await db.query("select count(*)::int as n from public.sync_jobs where state='pending'")).rows[0].n,0);
+  await db.exec("update public.drive_connections set last_sync_at=clock_timestamp()-interval '13 hours';select public.enqueue_drive_repairs();select public.enqueue_drive_repairs();");
+  assert.equal((await db.query("select count(*)::int as n from public.sync_jobs where state='pending'")).rows[0].n,1);
+});
+test('Nested folder memberships are replaced within their grant', async()=>{
+  await db.query('select public.replace_drive_folder_memberships($1,$2)',[grant,['test-folder','nested']]);
+  assert.equal((await db.query("select grant_id from public.drive_folder_memberships where drive_folder_id='nested'")).rows[0].grant_id,grant);
+  await db.query('select public.replace_drive_folder_memberships($1,$2)',[grant,['test-folder']]);
+  assert.equal((await db.query("select count(*)::int as n from public.drive_folder_memberships where drive_folder_id='nested'")).rows[0].n,0);
 });

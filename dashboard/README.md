@@ -24,3 +24,7 @@ For production, invoke `/api/v1/internal/sync` from a scheduled Worker and point
 - Refresh tokens are encrypted before persistence.
 - Database row-level security limits metadata and realtime records to workspace members and assigned folders.
 - Every mutation rechecks workspace membership; Drive remains the final authority for file capabilities.
+
+Synchronization uses Drive change cursors: normal notifications scan only affected connected folder trees, including previous memberships for moved/deleted files and nested folders. A baseline scan runs when establishing or recovering a cursor. Apply migration `003_folder_scoped_sync.sql` before running the updated worker. Missed notification checks run at most every 12 hours and consume the change feed rather than rescanning all grants.
+
+The browser checks Drive changes every five seconds while visible and refreshes only the affected view. Uploads appear immediately in their destination folder. Catch-up refreshes run after 60 seconds without input or while hidden, at most twice per day; browsers may defer timers in hidden tabs. The iOS app opens from saved data and waits five seconds before checking its change feed. Missing or expired cursors are established without a foreground baseline scan. Empty workspace deltas do not load saved videos, and nonempty deltas query only affected records. Full catch-up scans run when entering the background, at most twice per day, subject to the time iOS grants them.

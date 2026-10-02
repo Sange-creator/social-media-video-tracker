@@ -9,3 +9,5 @@
 The database stores metadata and upload text only. Original media remains in Google Drive.
 
 Apply `migrations/002_sync_reliability.sql` after the initial schema before deploying the updated sync API. It adds assignment change timestamps and the missing member access policies.
+
+Apply `migrations/003_folder_scoped_sync.sql` after migration 002 to store nested folder membership and reduce missed notification checks to twice daily.

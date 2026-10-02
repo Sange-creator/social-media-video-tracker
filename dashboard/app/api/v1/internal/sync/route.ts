@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { googleAccessToken, routeError, serviceSupabase } from "@/lib/server";
 import { scanDriveFolder } from "@/lib/driveScan";
+import { affectedDriveRoots, driveStartToken, readDriveChanges } from "@/lib/driveChanges";
 
 type SyncJob = {
   id: string;
@@ -62,25 +63,52 @@ export async function POST(request: NextRequest) {
         const scanStartedAt = new Date().toISOString();
         const token = await googleAccessToken(connection.encrypted_refresh_token);
 
-        // Capture the token before scanning. New files created during the
-        // scan remain pending for the next watch notification/repair scan.
-        const startRes = await fetch(
-          "https://www.googleapis.com/drive/v3/changes/startPageToken?supportsAllDrives=true",
-          { cache: "no-store", headers: { authorization: `Bearer ${token}` } }
-        );
-        if (!startRes.ok) throw new Error("Could not establish Drive sync cursor");
-        const { startPageToken: cursor } = await startRes.json() as { startPageToken: string };
-        if (!cursor) throw new Error("Invalid Drive sync cursor");
+        // A full baseline is needed only for a new/expired cursor. Notifications
+        // consume the change feed and scan only the corresponding granted trees.
+        let baseline = !connection.change_cursor;
+        let cursor: string;
+        let changes: Awaited<ReturnType<typeof readDriveChanges>>["changes"] = [];
+        if (baseline) cursor = await driveStartToken(token);
+        else {
+          try {
+            const page = await readDriveChanges(token, connection.change_cursor!);
+            changes = page.changes;
+            cursor = page.cursor;
+          } catch (error) {
+            if (!(error instanceof Error) || !error.message.includes('(410)')) throw error;
+            baseline = true;
+            cursor = await driveStartToken(token);
+          }
+        }
         const grants = await serviceSupabase<Array<{ id: string; drive_folder_id: string; folder_name: string }>>(
           `folder_grants?connection_id=eq.${connection.id}&select=id,drive_folder_id,folder_name`
         );
+        const affected = baseline ? new Set(grants.map(g => g.drive_folder_id))
+          : await affectedDriveRoots(token, changes, new Set(grants.map(g => g.drive_folder_id)));
+        // Include previous grants for a file moved out of a folder or removed.
+        for (const change of changes) {
+          if (!change.fileId) continue;
+          const folders = await serviceSupabase<Array<{ grant_id: string }>>(
+            `drive_folder_memberships?drive_folder_id=eq.${encodeURIComponent(change.fileId)}&select=grant_id`
+          );
+          for (const grant of grants) if (folders.some(p => p.grant_id === grant.id)) affected.add(grant.drive_folder_id);
+          const paths = await serviceSupabase<Array<{ grant_id: string }>>(
+            `media_access_paths?select=grant_id,media_items!inner(drive_file_id)&media_items.drive_file_id=eq.${encodeURIComponent(change.fileId)}`
+          );
+          for (const grant of grants) if (paths.some(p => p.grant_id === grant.id)) affected.add(grant.drive_folder_id);
+        }
         for (const grant of grants) {
-          const files = await scanDriveFolder(token, grant.drive_folder_id, grant.folder_name);
+          if (!affected.has(grant.drive_folder_id)) continue;
+          const folderIDs = new Set<string>();
+          const files = await scanDriveFolder(token, grant.drive_folder_id, grant.folder_name, folderIDs);
           // The database atomically reconciles paths and metadata, preserving
           // independently edited upload text and avoiding unchanged writes.
           await serviceSupabase("rpc/reconcile_drive_grant", {
             method: "POST",
             body: JSON.stringify({ p_workspace_id: connection.workspace_id, p_grant_id: grant.id, p_files: files }),
+          });
+          await serviceSupabase("rpc/replace_drive_folder_memberships", {
+            method: "POST", body: JSON.stringify({ p_grant_id: grant.id, p_folder_ids: [...folderIDs] }),
           });
         }
         await serviceSupabase(`drive_connections?id=eq.${connection.id}`, {

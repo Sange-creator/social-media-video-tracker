@@ -6,19 +6,27 @@ import XCTest
 
 @MainActor
 final class DriveReliabilityTests: XCTestCase {
-    func testBaselineCursorIsCapturedBeforeScan() async {
+    func testMissingCursorDoesNotStartScanOnAppOpen() async {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let tracker = DriveChangeTracker(defaults: defaults)
-        var order: [String] = []
-        await tracker.check(key: "cursor", startToken: {
-            order.append("token")
-            return "before-upload"
-        }, changes: { _ in XCTFail("Baseline must scan first"); return ([], "") }, reconcile: {
-            order.append("scan")
-            return true
-        }, isCurrentUser: { true })
-        XCTAssertEqual(order, ["token", "scan"])
-        XCTAssertEqual(defaults.string(forKey: "cursor"), "before-upload")
+        await tracker.check(key: "cursor", startToken: { "baseline" },
+                            changes: { _ in XCTFail("Baseline only establishes a cursor"); return ([], "") },
+                            reconcile: { _ in XCTFail("App open must not trigger a baseline scan"); return false },
+                            isCurrentUser: { true })
+        XCTAssertEqual(defaults.string(forKey: "cursor"), "baseline")
+    }
+
+    func testExpiredCursorRecoveryDoesNotStartScan() async {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set("expired", forKey: "cursor")
+        let tracker = DriveChangeTracker(defaults: defaults)
+        await tracker.check(key: "cursor", startToken: { "unused" },
+                            changes: { _ in throw DriveAPIError.http(410, "Expired") },
+                            reconcile: { _ in XCTFail("No scan for expiration"); return false }, isCurrentUser: { true })
+        await tracker.check(key: "cursor", startToken: { "new-baseline" },
+                            changes: { _ in XCTFail("No change page during cursor establishment"); return ([], "") },
+                            reconcile: { _ in XCTFail("No scan while recovering the cursor"); return false }, isCurrentUser: { true })
+        XCTAssertEqual(defaults.string(forKey: "cursor"), "new-baseline")
     }
 
     func testFailedScanRetainsChangesForRetry() async {
@@ -28,7 +36,10 @@ final class DriveReliabilityTests: XCTestCase {
         await tracker.check(key: "cursor", startToken: { "must-not-reset" }, changes: { token in
             XCTAssertEqual(token, "old")
             return ([DriveChange(fileId: "new-video", removed: false, file: nil)], "new")
-        }, reconcile: { false }, isCurrentUser: { true })
+        }, reconcile: { changes in
+            XCTAssertEqual(changes.first?.fileId, "new-video")
+            return false
+        }, isCurrentUser: { true })
         XCTAssertEqual(defaults.string(forKey: "cursor"), "old")
     }
 
@@ -37,7 +48,7 @@ final class DriveReliabilityTests: XCTestCase {
         defaults.set("old", forKey: "cursor")
         let tracker = DriveChangeTracker(defaults: defaults)
         await tracker.check(key: "cursor", startToken: { "" }, changes: { _ in ([], "new") },
-                            reconcile: { XCTFail("Empty pages do not need a full scan"); return false },
+                            reconcile: { _ in XCTFail("Empty pages do not need a full scan"); return false },
                             isCurrentUser: { true })
         XCTAssertEqual(defaults.string(forKey: "cursor"), "new")
     }
@@ -48,7 +59,7 @@ final class DriveReliabilityTests: XCTestCase {
         await DriveChangeTracker(defaults: defaults).check(
             key: "cursor", startToken: { XCTFail("Do not reset on network error"); return "" },
             changes: { _ in throw URLError(.notConnectedToInternet) },
-            reconcile: { XCTFail("Do not full scan while offline"); return false }, isCurrentUser: { true }
+            reconcile: { _ in XCTFail("Do not full scan while offline"); return false }, isCurrentUser: { true }
         )
         XCTAssertEqual(defaults.string(forKey: "cursor"), "old")
     }
@@ -58,7 +69,7 @@ final class DriveReliabilityTests: XCTestCase {
         defaults.set("old", forKey: "cursor")
         await DriveChangeTracker(defaults: defaults).check(
             key: "cursor", startToken: { "" }, changes: { _ in ([], "new") },
-            reconcile: { true }, isCurrentUser: { false }
+            reconcile: { _ in true }, isCurrentUser: { false }
         )
         XCTAssertEqual(defaults.string(forKey: "cursor"), "old")
     }
@@ -69,11 +80,11 @@ final class DriveReliabilityTests: XCTestCase {
         defaults.set("old", forKey: "cursor")
         await tracker.check(key: "cursor", startToken: { "" },
                             changes: { _ in throw DriveAPIError.http(403, "Forbidden") },
-                            reconcile: { false }, isCurrentUser: { true })
+                            reconcile: { _ in false }, isCurrentUser: { true })
         XCTAssertEqual(defaults.string(forKey: "cursor"), "old")
         await tracker.check(key: "cursor", startToken: { "" },
                             changes: { _ in throw DriveAPIError.http(410, "Expired") },
-                            reconcile: { false }, isCurrentUser: { true })
+                            reconcile: { _ in false }, isCurrentUser: { true })
         XCTAssertNil(defaults.string(forKey: "cursor"))
     }
 

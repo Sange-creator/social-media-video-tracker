@@ -25,6 +25,7 @@ import {
   Upload,
   Video,
 } from "lucide-react";
+import { driveStartToken, readDriveChanges, viewAffectedByChanges } from "@/lib/driveChanges";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -99,6 +100,14 @@ export default function Home() {
   const requestGeneration = useRef(0);
   const refreshInFlight = useRef(false);
   const lastDriveView = useRef("");
+  const foldersRef = useRef(folders);
+  useEffect(() => { foldersRef.current = folders; }, [folders]);
+  const mediaItemsRef = useRef(mediaItems);
+  useEffect(() => { mediaItemsRef.current = mediaItems; }, [mediaItems]);
+  const driveCursor = useRef<{ token: string; cursor: string } | null>(null);
+  const rootDriveID = useRef("root");
+  const lastIdleCheck = useRef(0);
+  const lastActivity = useRef(0);
 
   // Modals
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -107,7 +116,7 @@ export default function Home() {
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
 
   // Fetch real Google Drive folders & media files
-  const refreshDriveData = useCallback(async (token: string, folderId: string | null = null) => {
+  const refreshDriveData = useCallback(async (token: string, folderId: string | null = null, includeFolders = false) => {
     const viewKey = `${token}:${folderId ?? "root"}:${viewFilter}`;
     if (lastDriveView.current !== viewKey) {
       lastDriveView.current = viewKey;
@@ -121,18 +130,20 @@ export default function Home() {
     try {
       const targetFolder = folderId ?? "root";
       const [flds, files] = await Promise.all([
-        fetchDriveFolders(token, "root"),
+        includeFolders ? fetchDriveFolders(token, "root") : Promise.resolve(null),
         fetchDriveMediaFiles(token, targetFolder, "My Drive", viewFilter),
       ]);
       if (generation !== requestGeneration.current) return;
-      const folderName = flds.find((f) => f.id === targetFolder)?.name ?? "My Drive";
-      setFolders(flds);
+      const folderName = (flds ?? foldersRef.current).find((f) => f.id === targetFolder)?.name ?? "My Drive";
+      if (flds) setFolders(flds);
       setMediaItems(files.map((file) => ({ ...file, folder: folderName })));
       setSelectedId((previous) => files.some((file) => file.id === previous) ? previous : files[0]?.id ?? null);
       setSyncError(null);
+      return true;
     } catch (err) {
       if (generation !== requestGeneration.current) return;
       setSyncError(err instanceof Error ? err.message : "Could not sync Google Drive.");
+      return false;
     } finally {
       if (generation === requestGeneration.current) {
         refreshInFlight.current = false;
@@ -143,26 +154,82 @@ export default function Home() {
 
   useEffect(() => {
     if (!driveToken) return;
-    const refresh = () => {
-      if (!document.hidden && !refreshInFlight.current) {
-        void refreshDriveData(driveToken, selectedFolderId);
-      }
+    lastActivity.current = Date.now();
+    let cancelled = false;
+    let checking = false;
+    const refresh = async () => {
+      if (checking || refreshInFlight.current) return;
+      checking = true;
+      try {
+        if (driveCursor.current?.token !== driveToken) {
+          const response = await fetch("https://www.googleapis.com/drive/v3/files/root?fields=id", {
+            headers: { authorization: `Bearer ${driveToken}` },
+          });
+          if (!response.ok) throw new Error("Could not resolve My Drive folder.");
+          const root = await response.json() as { id: string };
+          if (cancelled) return;
+          rootDriveID.current = root.id;
+          const cursor = await driveStartToken(driveToken);
+          if (cancelled) return;
+          driveCursor.current = { token: driveToken, cursor };
+        }
+        const page = await readDriveChanges(driveToken, driveCursor.current!.cursor);
+        if (cancelled) return;
+        const folderChanged = page.changes.some(change =>
+          foldersRef.current.some(folder => folder.id === change.fileId) ||
+          (change.file?.mimeType === "application/vnd.google-apps.folder" && change.file.parents?.includes(rootDriveID.current)));
+        if (folderChanged) {
+          const updatedFolders = await fetchDriveFolders(driveToken, "root");
+          if (cancelled) return;
+          setFolders(updatedFolders);
+        }
+        const selectedFolderChanged = page.changes.some(change => change.fileId === selectedFolderId);
+        if (selectedFolderChanged || viewAffectedByChanges(page.changes, selectedFolderId ?? rootDriveID.current,
+          new Set(mediaItemsRef.current.map(file => file.id)), viewFilter)) {
+          if (!await refreshDriveData(driveToken, selectedFolderId)) return;
+        }
+        if (!cancelled) driveCursor.current = { token: driveToken, cursor: page.cursor };
+      } catch (error) {
+        if (!cancelled) {
+          if (error instanceof Error && error.message.includes("(410)")) driveCursor.current = null;
+          setSyncError(error instanceof Error ? error.message : "Could not check Drive changes.");
+        }
+      } finally { checking = false; }
     };
-    // Start after the first paint; subsequent checks follow foreground events.
-    const initialRefresh = window.setTimeout(refresh, 0);
-    const timer = window.setInterval(refresh, 10_000);
-    document.addEventListener("visibilitychange", refresh);
-    window.addEventListener("focus", refresh);
+    const initialRefresh = window.setTimeout(() => {
+      void (async () => {
+        await refresh();
+        if (!cancelled) await refreshDriveData(driveToken, selectedFolderId, foldersRef.current.length === 0);
+      })();
+    }, 0);
+    const activity = () => { lastActivity.current = Date.now(); };
+    const visibility = () => { if (!document.hidden) void refresh(); };
+    const timer = window.setInterval(() => {
+      const idle = document.hidden || Date.now() - lastActivity.current >= 60_000;
+      const saved = Number(localStorage.getItem("drive-idle-check") || 0);
+      if (idle && Date.now() - Math.max(saved, lastIdleCheck.current) >= 43_200_000 && !refreshInFlight.current && !checking) {
+        lastIdleCheck.current = Date.now();
+        localStorage.setItem("drive-idle-check", String(lastIdleCheck.current));
+        void refreshDriveData(driveToken, selectedFolderId);
+      } else if (!document.hidden) {
+        void refresh();
+      }
+    }, 5_000);
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("focus", visibility);
+    for (const event of ["pointerdown", "pointermove", "keydown", "scroll"]) window.addEventListener(event, activity, { passive: true });
     const generationRef = requestGeneration;
     return () => {
+      cancelled = true;
       ++generationRef.current;
       refreshInFlight.current = false;
       window.clearTimeout(initialRefresh);
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", refresh);
-      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("focus", visibility);
+      for (const event of ["pointerdown", "pointermove", "keydown", "scroll"]) window.removeEventListener(event, activity);
     };
-  }, [driveToken, selectedFolderId, refreshDriveData]);
+  }, [driveToken, selectedFolderId, viewFilter, refreshDriveData]);
 
   // Filter media items
   const items = useMemo(() => {
@@ -597,8 +664,10 @@ export default function Home() {
           ++requestGeneration.current;
           refreshInFlight.current = false;
           setIsLoading(false);
-          setMediaItems((prev) => [newFile, ...prev.filter((file) => file.id !== newFile.id)]);
-          setSelectedId(newFile.id);
+          if (newFile.folderId === (selectedFolderId ?? "root") && viewFilter === "all") {
+            setMediaItems((prev) => [newFile, ...prev.filter((file) => file.id !== newFile.id)]);
+            setSelectedId(newFile.id);
+          }
           setUploadOpen(false);
         }}
       />
