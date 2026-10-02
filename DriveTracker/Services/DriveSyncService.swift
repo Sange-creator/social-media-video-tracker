@@ -8,10 +8,20 @@ struct DriveSyncResult: Equatable {
 }
 
 @MainActor
-final class DriveSyncService {
-    private let api: DriveAPIClient
+protocol DriveMetadataAPI {
+    var currentUserID: String? { get }
+    func item(id: String, resourceKey: String?) async throws -> DriveItem
+    func listChildren(of folderID: String, folderResourceKey: String?) async throws -> [DriveItem]
+}
 
-    init(api: DriveAPIClient) {
+extension DriveAPIClient: DriveMetadataAPI {}
+
+@MainActor
+final class DriveSyncService {
+    private let api: any DriveMetadataAPI
+    private var scanTasks: [String: Task<DriveSyncResult, Error>] = [:]
+
+    init(api: any DriveMetadataAPI) {
         self.api = api
     }
 
@@ -20,6 +30,28 @@ final class DriveSyncService {
         account: TikTokAccount,
         context: ModelContext
     ) async throws -> DriveSyncResult {
+        let key = "\(account.googleUserID)|\(root.folderID)"
+        let task: Task<DriveSyncResult, Error>
+        if let existing = scanTasks[key] {
+            task = existing
+        } else {
+            task = Task { @MainActor in
+                defer { self.scanTasks.removeValue(forKey: key) }
+                return try await self.reconcile(root: root, account: account, context: context)
+            }
+            scanTasks[key] = task
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func reconcile(root: DriveFolderReference, account: TikTokAccount, context: ModelContext) async throws -> DriveSyncResult {
+        try Task.checkCancellation()
         // Drive is queried first, then reconciled against the account's existing
         // records. This makes missing files detectable without deleting local
         // history or resetting an in-progress assignment.
@@ -55,12 +87,23 @@ final class DriveSyncService {
             visitedFolders: &visitedFolders
         )
 
+        try Task.checkCancellation()
+        guard api.currentUserID == googleUserID, account.modelContext != nil,
+              account.googleUserID == googleUserID, account.driveFolderID == root.folderID else {
+            throw GoogleAuthError.notSignedIn
+        }
+
         for (index, located) in locatedVideos.enumerated() {
             try Task.checkCancellation()
             // Large folders should never monopolize the main actor while the
             // user is scrolling or changing tabs.
             if index > 0, index.isMultiple(of: 20) {
                 await Task.yield()
+                try Task.checkCancellation()
+                guard api.currentUserID == googleUserID, account.modelContext != nil,
+                      account.googleUserID == googleUserID, account.driveFolderID == root.folderID else {
+                    throw GoogleAuthError.notSignedIn
+                }
             }
             let item = located.item
             let key = VideoAsset.makeIdentityKey(
@@ -83,10 +126,14 @@ final class DriveSyncService {
                     video.isMissingFromDrive ||
                     video.canDownload != canDownload ||
                     video.account?.id != account.id
+                let descriptionChanged = video.workspaceMediaID == nil &&
+                    video.uploadTextSyncState == .synced &&
+                    item.description != nil && video.uploadText != item.description
+                if descriptionChanged { video.uploadText = item.description ?? "" }
                 let refreshLastSeen =
                     scanTime.timeIntervalSince(video.lastSeenAt) >= 86_400
 
-                if metadataChanged || refreshLastSeen {
+                if metadataChanged || descriptionChanged || refreshLastSeen {
                     video.name = item.name
                     video.folderPath = located.folderPath
                     video.mimeType = item.effectiveMimeType
@@ -120,6 +167,7 @@ final class DriveSyncService {
                     canDownload: item.capabilities?.canDownload ?? true,
                     account: account
                 )
+                video.uploadText = item.description ?? ""
                 context.insert(video)
                 newVideos += 1
                 hasPersistentChanges = true

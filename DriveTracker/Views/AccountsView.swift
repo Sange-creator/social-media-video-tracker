@@ -5,194 +5,39 @@ struct AccountsView: View {
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
     @State private var showAddAccountFlow = false
 
-    private var activeCount: Int {
-        accounts.filter { $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }.count
-    }
-
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    customTopHeader
-
-                    HStack {
-                        TrackerSectionLabel(
-                            title: "Your accounts",
-                            trailing: "\(activeCount) active / \(accounts.count) total"
-                        )
-                    }
-                    .padding(.top, 4)
-                    .padding(.bottom, 4)
-
-                    ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
-                        NavigationLink {
-                            AccountEditorView(account: account)
-                        } label: {
-                            AccountRow(account: account, sequence: index + 1)
-                        }
-                        .buttonStyle(TrackerPressButtonStyle())
-                    }
-
-                    if accounts.isEmpty {
-                        ContentUnavailableView(
-                            "No accounts yet",
-                            systemImage: "person.crop.circle.badge.plus",
-                            description: Text("Connect a Drive folder in Settings, then give the account a name and daily target.")
-                        )
-                        .foregroundStyle(TrackerPalette.muted)
-                        .padding(.top, 44)
+            List {
+                ForEach(accounts.filter { $0.modelContext != nil && !$0.isDeleted }) { account in
+                    NavigationLink {
+                        AccountEditorView(account: account)
+                    } label: {
+                        HStack(spacing: 12) {
+                            AccountIdentityIcon(symbol: account.iconSymbol, colorHex: account.iconColorHex, size: 36)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(account.displayName).font(.headline)
+                                Text("\(account.dailyQuota) videos daily · \(account.isPaused ? "Paused" : "Active")")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }.padding(.vertical, 6)
                     }
                 }
-                .padding(16)
-                .padding(.top, 8)
-                .padding(.bottom, 96)
-            }
-            .trackerScreen()
-            .toolbar(.hidden, for: .navigationBar)
-        }
-        .sheet(isPresented: $showAddAccountFlow) {
-            AddAccountFlowView()
-        }
-    }
-
-    private var customTopHeader: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("ACCOUNTS")
-                    .font(.system(size: 24, weight: .black, design: .rounded))
-                    .foregroundStyle(TrackerPalette.textPrimary)
-
-                Text("\(accounts.filter { $0.isConfigured }.count) Active Profiles")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            Spacer()
-
-            Button {
-                showAddAccountFlow = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .bold))
-                    Text("Add")
-                        .font(.system(size: 12, weight: .bold))
+                if accounts.isEmpty {
+                    ContentUnavailableView("No accounts yet", systemImage: "person.crop.circle.badge.plus",
+                        description: Text("Connect a Drive folder to create an account."))
                 }
-                .foregroundStyle(Color(hex: "#090A0F"))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(TrackerPalette.accent, in: Capsule())
             }
-            .buttonStyle(TrackerPressButtonStyle())
-        }
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
-    }
-}
-
-private struct AccountRow: View {
-    let account: TikTokAccount
-    let sequence: Int
-
-    private var stateLabel: String {
-        if !account.isConfigured { return "Set up" }
-        if account.isMissingFromDrive { return "Missing" }
-        if account.isPaused { return "Paused" }
-        return "Active"
-    }
-
-    private var stateColor: Color {
-        if !account.isConfigured { return TrackerPalette.warning }
-        if account.isMissingFromDrive { return TrackerPalette.danger }
-        if account.isPaused { return TrackerPalette.warning }
-        return TrackerPalette.success
-    }
-
-    private var completedToday: Int {
-        account.videos.filter { video in
-            guard let uploadedAt = video.uploadedAt else { return false }
-            return DayKey.isToday(uploadedAt)
-        }.count
-    }
-
-    private var quotaProgress: Double {
-        account.dailyQuota > 0 ? Double(completedToday) / Double(account.dailyQuota) : 0
-    }
-
-    var body: some View {
-        let completed = completedToday
-        let progress = account.dailyQuota > 0 ? Double(completed) / Double(account.dailyQuota) : 0
-        VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                AccountIdentityIcon(
-                    symbol: account.iconSymbol,
-                    colorHex: account.iconColorHex,
-                    size: 48
-                )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(account.isConfigured ? account.displayName : "Configure account")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(TrackerPalette.textPrimary)
-                    Text(account.folderName)
-                        .font(.caption)
-                        .foregroundStyle(TrackerPalette.muted)
-                        .lineLimit(1)
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(TrackerPalette.canvas)
+            .navigationTitle("Accounts")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Add account", systemImage: "plus") { showAddAccountFlow = true }
                 }
-
-                Spacer()
-
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(stateColor)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: stateColor.opacity(0.6), radius: 3)
-                    Text(stateLabel)
-                        .font(.caption.weight(.semibold))
-                }
-                .foregroundStyle(stateColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(stateColor.opacity(0.12), in: Capsule())
-
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            // Quota progress bar
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text("Today's Pace")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(TrackerPalette.muted)
-                    Spacer()
-                    Text("\(completed) of \(account.dailyQuota) done")
-                        .font(.caption2.monospacedDigit().weight(.bold))
-                        .foregroundStyle(completed >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
-                }
-
-                ProgressView(value: min(max(progress, 0), 1))
-                    .tint(completed >= account.dailyQuota ? TrackerPalette.success : TrackerPalette.accent)
-                    .background(TrackerPalette.raised, in: Capsule())
-                    .frame(height: 5)
-            }
-
-            Divider().overlay(TrackerPalette.line)
-
-            HStack {
-                TrackerMetric(value: "\(account.dailyQuota)", label: "Daily quota")
-                Spacer()
-                TrackerMetric(value: "\(account.availableCount)", label: "Unused", tint: TrackerPalette.accent)
-                Spacer()
-                TrackerMetric(
-                    value: "\(account.uploadedCount)",
-                    label: "Completed",
-                    tint: TrackerPalette.success
-                )
             }
         }
-        .trackerCard(padding: 16)
+        .sheet(isPresented: $showAddAccountFlow) { AddAccountFlowView() }
     }
 }
 

@@ -27,7 +27,6 @@ struct AnalyticsView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
-                    customTopHeader
                     dailyTrackerCard
                     overviewGrid
                     trendCard
@@ -41,46 +40,12 @@ struct AnalyticsView: View {
                 .padding(.bottom, 96)
             }
             .trackerScreen()
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("Analytics")
             .refreshable {
                 state.scheduleAnalyticsRefresh(context: context)
             }
         }
         .task { state.scheduleAnalyticsRefresh(context: context) }
-    }
-
-    private var customTopHeader: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("ANALYTICS")
-                    .font(.system(size: 24, weight: .black, design: .rounded))
-                    .foregroundStyle(TrackerPalette.textPrimary)
-
-                Text("Performance & Quotas")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            Spacer()
-
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(TrackerPalette.accent)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: TrackerPalette.accent.opacity(0.8), radius: 3)
-                Text("LIVE")
-                    .font(.system(size: 10, weight: .black))
-                    .foregroundStyle(TrackerPalette.accent)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(TrackerPalette.accent.opacity(0.12), in: Capsule())
-            .overlay {
-                Capsule().stroke(TrackerPalette.accent.opacity(0.3), lineWidth: 1)
-            }
-        }
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
     }
 
     private var dailyTrackerCard: some View {

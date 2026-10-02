@@ -26,24 +26,39 @@ struct DriveTrackerApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var state = AppState()
 
-    private let container: ModelContainer = ModelContainerFactory.createContainer()
+    @State private var containerLoad = Result { try ModelContainerFactory.createContainer() }
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(state)
-                .environmentObject(state.auth)
-                .onOpenURL { url in
-                    _ = state.auth.handle(url: url)
+            switch containerLoad {
+            case .success(let container):
+                RootView()
+                    .environmentObject(state)
+                    .environmentObject(state.auth)
+                    .modelContainer(container)
+                    .onOpenURL { url in
+                        _ = state.auth.handle(url: url)
+                    }
+            case .failure(let error):
+                ContentUnavailableView {
+                    Label("Tracker storage unavailable", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text("Your saved tracker could not be opened. Existing data has been kept. \(error.localizedDescription)")
+                } actions: {
+                    Button("Try Again") {
+                        containerLoad = Result { try ModelContainerFactory.createContainer() }
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
+            }
         }
-        .modelContainer(container)
         .onChange(of: scenePhase) { _, newPhase in
             Task {
                 switch newPhase {
                 case .active:
-                    await state.sync(context: container.mainContext, announce: false)
+                    break // RootView starts the foreground change monitor.
                 case .background:
+                    guard case .success(let container) = containerLoad else { return }
                     await state.backupNow(context: container.mainContext)
                 default:
                     break
@@ -64,7 +79,7 @@ enum ModelContainerFactory {
         CopyEvent.self
     ])
 
-    static func createContainer() -> ModelContainer {
+    static func createContainer() throws -> ModelContainer {
         let fileManager = FileManager.default
         if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             try? fileManager.createDirectory(at: appSupport, withIntermediateDirectories: true)
@@ -77,28 +92,9 @@ enum ModelContainerFactory {
             allowsSave: true
         )
 
-        // Attempt 1: Persistent store with DriveTracker schema
-        do {
-            return try ModelContainer(for: schema, configurations: [configuration])
-        } catch {
-            print("[DriveTracker] Failed to create persistent ModelContainer: \(error)")
-        }
-
-        // Attempt 2: Fallback to default persistent store configuration
-        if let defaultContainer = try? ModelContainer(for: schema) {
-            return defaultContainer
-        }
-
-        // Attempt 3: In-memory fallback if disk storage is entirely unavailable
-        let memoryConfig = ModelConfiguration(
-            "DriveTracker_Memory",
-            schema: schema,
-            isStoredInMemoryOnly: true,
-            allowsSave: true
-        )
-        if let memContainer = try? ModelContainer(for: schema, configurations: [memoryConfig]) {
-            return memContainer
-        }
-        return try! ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
+        // Never switch to a different store or an ephemeral database after a
+        // disk/migration failure: that makes preserved history look erased and
+        // lets new downloads disappear on the next launch.
+        return try ModelContainer(for: schema, configurations: [configuration])
     }
 }

@@ -177,8 +177,8 @@ final class AccountDeletionTests: XCTestCase {
         XCTAssertEqual(remainingSources.count, 1)
     }
 
-    func testModelContainerFactoryCreatesValidContainer() {
-        let container = ModelContainerFactory.createContainer()
+    func testModelContainerFactoryCreatesValidContainer() throws {
+        let container = try ModelContainerFactory.createContainer()
         XCTAssertNotNil(container.mainContext)
     }
 

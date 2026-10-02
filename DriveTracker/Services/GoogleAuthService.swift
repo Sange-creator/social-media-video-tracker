@@ -127,6 +127,8 @@ final class GoogleAuthService: ObservableObject {
                 }
             }
         }
+        guard current.userID == GIDSignIn.sharedInstance.currentUser?.userID,
+              current.userID == userID else { throw GoogleAuthError.notSignedIn }
         let token = refreshed.accessToken.tokenString
         guard !token.isEmpty else { throw GoogleAuthError.missingToken }
         apply(user: refreshed)
@@ -175,9 +177,15 @@ final class GoogleAuthService: ObservableObject {
     }
 
     private func apply(user: GIDGoogleUser?) {
-        isSignedIn = user != nil
-        email = user?.profile?.email
-        userID = user?.userID
+        applyIdentity(isSignedIn: user != nil, email: user?.profile?.email, userID: user?.userID)
+    }
+
+    // Token refresh happens for every authorized request. Publish only actual
+    // identity changes instead of invalidating every screen per thumbnail.
+    func applyIdentity(isSignedIn signedIn: Bool, email newEmail: String?, userID newUserID: String?) {
+        if isSignedIn != signedIn { isSignedIn = signedIn }
+        if email != newEmail { email = newEmail }
+        if userID != newUserID { userID = newUserID }
     }
 }
 

@@ -101,7 +101,6 @@ export function useSession() {
         window.removeEventListener("auth-state-change", handleCustomAuth);
       };
     } else {
-      setSession(getStoredAdminSession());
       const handleCustomAuth = () => {
         setSession(getStoredAdminSession());
       };
@@ -151,7 +150,7 @@ export async function signInAdmin(email: string, pass: string): Promise<AppSessi
 
 export async function signIn() {
   if (!supabaseClient) {
-    throw new Error("Supabase is not configured yet. Sign in with admin@gmail.com / admin123 instead.");
+    throw new Error("Supabase is not configured. Configure authentication before signing in.");
   }
   await supabaseClient.auth.signInWithOAuth({
     provider: "google",

@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Check,
   ChevronRight,
   Cloud,
   Copy,
-  Download,
   ExternalLink,
   Film,
   Folder,
@@ -17,17 +17,13 @@ import {
   List,
   Loader2,
   LogOut,
-  MoreHorizontal,
-  Play,
   Plus,
   RefreshCw,
   Search,
   Star,
   Trash2,
   Upload,
-  Users,
   Video,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,11 +40,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  DEFAULT_GOOGLE_CLIENT_ID,
   GoogleDriveFolder,
   GoogleDriveMediaFile,
   GoogleDriveUser,
@@ -59,15 +53,15 @@ import {
   fetchDriveMediaFiles,
   fetchGoogleUserInfo,
   getStoredDriveToken,
-  getStoredDriveUser,
+  getStoredDriveUserSnapshot,
+  subscribeDriveSession,
   getStoredGoogleClientId,
   setStoredDriveSession,
-  setStoredGoogleClientId,
   toggleDriveStar,
   updateDriveDescription,
   uploadToGoogleDrive,
 } from "@/lib/googleDriveClient";
-import { signInAdmin, signOut, useSession } from "@/lib/supabase";
+import { signInAdmin } from "@/lib/supabase";
 
 function BrandMark({ className = "h-8 w-8" }: { className?: string }) {
   return (
@@ -85,70 +79,14 @@ function BrandMark({ className = "h-8 w-8" }: { className?: string }) {
   );
 }
 
-const fallbackMediaList: GoogleDriveMediaFile[] = [
-  {
-    id: "sample-1",
-    driveFileId: "sample-1",
-    name: "morning-routine-v2.mp4",
-    kind: "video",
-    mimeType: "video/mp4",
-    folder: "TikTok / Lifestyle",
-    folderId: "fld-1",
-    size: "42.8 MB",
-    rawSizeBytes: 44879052,
-    updatedLabel: "Today",
-    starred: true,
-    trashed: false,
-    canDownload: true,
-    accent: "blue",
-    uploadText: "My 5-minute morning routine before creative sessions. Save this for tomorrow morning! ☕️⚡️\n\n#MorningRoutine #CreatorLife #Productivity #DailyVlog",
-    revision: 2,
-    thumbnailUrl: null,
-  },
-  {
-    id: "sample-2",
-    driveFileId: "sample-2",
-    name: "desk-setup-cinematic.mov",
-    kind: "video",
-    mimeType: "video/quicktime",
-    folder: "YouTube Shorts / Setups",
-    folderId: "fld-2",
-    size: "128 MB",
-    rawSizeBytes: 134217728,
-    updatedLabel: "Yesterday",
-    starred: false,
-    trashed: false,
-    canDownload: true,
-    accent: "blue",
-    uploadText: "The minimal creator setup that took 3 years to build. Every piece has a reason.\n\n#DeskSetup #TechReview #WorkspaceGoals #Shorts",
-    revision: 1,
-    thumbnailUrl: null,
-  },
-  {
-    id: "sample-3",
-    driveFileId: "sample-3",
-    name: "thumbnail-concept-01.jpg",
-    kind: "photo",
-    mimeType: "image/jpeg",
-    folder: "Thumbnails",
-    folderId: "fld-3",
-    size: "3.2 MB",
-    rawSizeBytes: 3355443,
-    updatedLabel: "Sep 24",
-    starred: true,
-    trashed: false,
-    canDownload: true,
-    accent: "teal",
-    uploadText: "High-contrast thumbnail design for episode 4. Split lighting with cyan rim light.",
-    revision: 1,
-    thumbnailUrl: null,
-  },
-];
-
 export default function Home() {
   const [query, setQuery] = useState("");
-  const [driveToken, setDriveToken] = useState<string | null>(null);
-  const [driveUser, setDriveUser] = useState<GoogleDriveUser | null>(null);
+  const driveToken = useSyncExternalStore(subscribeDriveSession, getStoredDriveToken, () => null);
+  const userSnapshot = useSyncExternalStore(subscribeDriveSession, getStoredDriveUserSnapshot, () => null);
+  const driveUser = useMemo(() => {
+    try { return userSnapshot ? JSON.parse(userSnapshot) as GoogleDriveUser : null; }
+    catch { return null; }
+  }, [userSnapshot]);
   const [folders, setFolders] = useState<GoogleDriveFolder[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [selectedFolderName, setSelectedFolderName] = useState<string>("All files");
@@ -157,6 +95,10 @@ export default function Home() {
   const [mediaItems, setMediaItems] = useState<GoogleDriveMediaFile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const requestGeneration = useRef(0);
+  const refreshInFlight = useRef(false);
+  const lastDriveView = useRef("");
 
   // Modals
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -164,62 +106,67 @@ export default function Home() {
   const [connectDriveOpen, setConnectDriveOpen] = useState(false);
   const [adminLoginOpen, setAdminLoginOpen] = useState(false);
 
-  // Load Drive auth on mount
-  useEffect(() => {
-    const token = getStoredDriveToken();
-    const user = getStoredDriveUser();
-    setDriveToken(token);
-    setDriveUser(user);
-
-    const onAuthChange = () => {
-      setDriveToken(getStoredDriveToken());
-      setDriveUser(getStoredDriveUser());
-    };
-    window.addEventListener("gdrive-auth-change", onAuthChange);
-    return () => window.removeEventListener("gdrive-auth-change", onAuthChange);
-  }, []);
-
   // Fetch real Google Drive folders & media files
-  const refreshDriveData = async (token: string, folderId: string | null = null) => {
+  const refreshDriveData = useCallback(async (token: string, folderId: string | null = null) => {
+    const viewKey = `${token}:${folderId ?? "root"}:${viewFilter}`;
+    if (lastDriveView.current !== viewKey) {
+      lastDriveView.current = viewKey;
+      setMediaItems([]);
+      setSelectedId(null);
+      setSyncError(null);
+    }
+    const generation = ++requestGeneration.current;
+    refreshInFlight.current = true;
     setIsLoading(true);
     try {
-      // 1. Fetch folders
-      const flds = await fetchDriveFolders(token, "root");
-      setFolders(flds);
-
-      // 2. Fetch media files in active folder
       const targetFolder = folderId ?? "root";
+      const [flds, files] = await Promise.all([
+        fetchDriveFolders(token, "root"),
+        fetchDriveMediaFiles(token, targetFolder, "My Drive", viewFilter),
+      ]);
+      if (generation !== requestGeneration.current) return;
       const folderName = flds.find((f) => f.id === targetFolder)?.name ?? "My Drive";
-      const files = await fetchDriveMediaFiles(token, targetFolder, folderName);
-      setMediaItems(files);
-      if (files.length > 0 && !selectedId) {
-        setSelectedId(files[0].id);
-      }
+      setFolders(flds);
+      setMediaItems(files.map((file) => ({ ...file, folder: folderName })));
+      setSelectedId((previous) => files.some((file) => file.id === previous) ? previous : files[0]?.id ?? null);
+      setSyncError(null);
     } catch (err) {
-      console.error("Failed to load Google Drive files:", err);
-      // Fallback to sample items if Drive token expired
-      setMediaItems(fallbackMediaList);
+      if (generation !== requestGeneration.current) return;
+      setSyncError(err instanceof Error ? err.message : "Could not sync Google Drive.");
     } finally {
-      setIsLoading(false);
+      if (generation === requestGeneration.current) {
+        refreshInFlight.current = false;
+        setIsLoading(false);
+      }
     }
-  };
+  }, [viewFilter]);
 
   useEffect(() => {
-    if (driveToken) {
-      void refreshDriveData(driveToken, selectedFolderId);
-    } else {
-      setMediaItems(fallbackMediaList);
-      setFolders([
-        { id: "fld-1", name: "TikTok / Lifestyle" },
-        { id: "fld-2", name: "YouTube Shorts / Setups" },
-        { id: "fld-3", name: "Thumbnails" },
-      ]);
-    }
-  }, [driveToken, selectedFolderId]);
+    if (!driveToken) return;
+    const refresh = () => {
+      if (!document.hidden && !refreshInFlight.current) {
+        void refreshDriveData(driveToken, selectedFolderId);
+      }
+    };
+    // Start after the first paint; subsequent checks follow foreground events.
+    const initialRefresh = window.setTimeout(refresh, 0);
+    const timer = window.setInterval(refresh, 10_000);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    const generationRef = requestGeneration;
+    return () => {
+      ++generationRef.current;
+      refreshInFlight.current = false;
+      window.clearTimeout(initialRefresh);
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [driveToken, selectedFolderId, refreshDriveData]);
 
   // Filter media items
   const items = useMemo(() => {
-    let list = mediaItems;
+    let list = driveToken ? mediaItems : [];
     if (viewFilter === "starred") {
       list = list.filter((i) => i.starred && !i.trashed);
     } else if (viewFilter === "trash") {
@@ -244,55 +191,33 @@ export default function Home() {
 
   const selected = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
 
-  // Handle caption update
   const handleSaveCaption = async (fileId: string, newText: string) => {
-    // 1. Optimistic local update
-    setMediaItems((prev) =>
-      prev.map((item) =>
-        item.id === fileId
-          ? { ...item, uploadText: newText, revision: item.revision + 1 }
-          : item
-      )
-    );
-
-    // 2. Real Drive update if connected
-    if (driveToken) {
-      try {
-        await updateDriveDescription(driveToken, fileId, newText);
-      } catch (err) {
-        console.error("Failed to update caption in Drive:", err);
-      }
-    }
+    if (!driveToken) throw new Error("Connect Google Drive before saving.");
+    await updateDriveDescription(driveToken, fileId, newText);
+    ++requestGeneration.current;
+    refreshInFlight.current = false;
+    setIsLoading(false);
+    setMediaItems((prev) => prev.map((item) => item.id === fileId
+      ? { ...item, uploadText: newText, revision: item.revision + 1 } : item));
   };
 
-  // Handle file deletion
   const handleDeleteFile = async (fileId: string) => {
-    setMediaItems((prev) => prev.filter((item) => item.id !== fileId));
-    if (selectedId === fileId) {
-      const remaining = items.filter((i) => i.id !== fileId);
-      setSelectedId(remaining[0]?.id ?? null);
-    }
-
-    if (driveToken) {
-      try {
-        await deleteDriveFile(driveToken, fileId);
-      } catch (err) {
-        console.error("Failed to delete file from Drive:", err);
-      }
+    if (!driveToken) return;
+    try {
+      await deleteDriveFile(driveToken, fileId, !mediaItems.find((file) => file.id === fileId)?.trashed);
+      await refreshDriveData(driveToken, selectedFolderId);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Could not delete file.");
     }
   };
 
-  // Handle star toggle
   const handleToggleStar = async (fileId: string, starred: boolean) => {
-    setMediaItems((prev) =>
-      prev.map((item) => (item.id === fileId ? { ...item, starred } : item))
-    );
-    if (driveToken) {
-      try {
-        await toggleDriveStar(driveToken, fileId, starred);
-      } catch (err) {
-        console.error("Failed to star file in Drive:", err);
-      }
+    if (!driveToken) return;
+    try {
+      await toggleDriveStar(driveToken, fileId, starred);
+      await refreshDriveData(driveToken, selectedFolderId);
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : "Could not update favorite.");
     }
   };
 
@@ -386,8 +311,6 @@ export default function Home() {
                   className="cursor-pointer gap-2 text-red-400"
                   onClick={() => {
                     disconnectDriveSession();
-                    setDriveToken(null);
-                    setDriveUser(null);
                   }}
                 >
                   <LogOut className="w-4 h-4" />
@@ -466,7 +389,7 @@ export default function Home() {
               <span>My Drive (Root)</span>
             </button>
 
-            {folders.map((folder) => (
+            {(driveToken ? folders : []).map((folder) => (
               <button
                 key={folder.id}
                 className={`folder-item ${selectedFolderId === folder.id ? "active" : ""}`}
@@ -498,6 +421,7 @@ export default function Home() {
 
       {/* Main Library Pane */}
       <section className="library-pane">
+        {syncError && <div role="alert" className="rounded-xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-200">{syncError}</div>}
         {!driveToken && (
           <div className="bg-gradient-to-r from-blue-900/30 to-indigo-900/30 border border-blue-500/30 rounded-xl p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -601,7 +525,7 @@ export default function Home() {
               >
                 <div className="poster-box">
                   {item.thumbnailUrl ? (
-                    <img src={item.thumbnailUrl} alt={item.name} loading="lazy" />
+                    <Image src={item.thumbnailUrl} alt={item.name} width={320} height={320} unoptimized loading="lazy" />
                   ) : (
                     <div className="poster-fallback">
                       {item.kind === "video" ? <Video /> : <ImageIcon />}
@@ -663,14 +587,17 @@ export default function Home() {
 
       {/* Upload & Caption Modal */}
       <UploadModal
+        key={selectedFolderId ?? "root"}
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         driveToken={driveToken}
         folders={folders}
         defaultFolderId={selectedFolderId ?? "root"}
-        defaultFolderName={selectedFolderName}
         onUploadComplete={(newFile) => {
-          setMediaItems((prev) => [newFile, ...prev]);
+          ++requestGeneration.current;
+          refreshInFlight.current = false;
+          setIsLoading(false);
+          setMediaItems((prev) => [newFile, ...prev.filter((file) => file.id !== newFile.id)]);
           setSelectedId(newFile.id);
           setUploadOpen(false);
         }}
@@ -681,9 +608,7 @@ export default function Home() {
         open={connectDriveOpen}
         onOpenChange={setConnectDriveOpen}
         driveUser={driveUser}
-        onConnected={(token, user) => {
-          setDriveToken(token);
-          setDriveUser(user);
+        onConnected={(token) => {
           setConnectDriveOpen(false);
           void refreshDriveData(token);
         }}
@@ -723,14 +648,13 @@ function InspectorDetail({
   onDelete: () => Promise<void>;
   onToggleStar: (starred: boolean) => Promise<void>;
 }) {
-  const [caption, setCaption] = useState(item.uploadText);
+  const [captionDraft, setCaption] = useState<string | null>(null);
+  const caption = captionDraft ?? item.uploadText;
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  useEffect(() => {
-    setCaption(item.uploadText);
-  }, [item.id, item.uploadText]);
 
   // Copy caption & hashtags to clipboard
   const copyToClipboard = async () => {
@@ -747,10 +671,14 @@ function InspectorDetail({
   // Save caption
   const handleSave = async () => {
     setIsSaving(true);
+    setSaveError(null);
     try {
       await onSaveCaption(caption);
+      setCaption(null);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Could not save caption.");
     } finally {
       setIsSaving(false);
     }
@@ -774,7 +702,7 @@ function InspectorDetail({
             title={item.name}
           />
         ) : item.thumbnailUrl ? (
-          <img src={item.thumbnailUrl} alt={item.name} />
+          <Image src={item.thumbnailUrl} alt={item.name} width={640} height={640} unoptimized />
         ) : (
           <div className="flex flex-col items-center gap-2 text-slate-500">
             {item.kind === "video" ? <Video className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
@@ -817,6 +745,7 @@ function InspectorDetail({
 
       {/* Caption & Hashtag Editor */}
       <div className="caption-editor-section">
+        {saveError && <p role="alert" className="text-sm text-red-300">{saveError}</p>}
         <div className="caption-header-row">
           <strong>Upload Text (Caption, Title & Tags)</strong>
           {saveSuccess ? (
@@ -907,7 +836,7 @@ function InspectorDetail({
           onClick={onDelete}
         >
           <Trash2 className="w-3.5 h-3.5" />
-          <span>Move to Trash</span>
+          <span>{item.trashed ? "Restore from Trash" : "Move to Trash"}</span>
         </Button>
       </div>
     </>
@@ -923,7 +852,6 @@ function UploadModal({
   driveToken,
   folders,
   defaultFolderId,
-  defaultFolderName,
   onUploadComplete,
 }: {
   open: boolean;
@@ -931,20 +859,17 @@ function UploadModal({
   driveToken: string | null;
   folders: GoogleDriveFolder[];
   defaultFolderId: string;
-  defaultFolderName: string;
   onUploadComplete: (file: GoogleDriveMediaFile) => void;
 }) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [targetFolderId, setTargetFolderId] = useState(defaultFolderId);
+  const [folderOverride, setTargetFolderId] = useState<string | null>(null);
+  const targetFolderId = folderOverride ?? defaultFolderId;
   const [caption, setCaption] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    setTargetFolderId(defaultFolderId);
-  }, [defaultFolderId]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -970,32 +895,7 @@ function UploadModal({
         });
         onUploadComplete(result);
       } else {
-        // Fallback simulated upload for local preview
-        for (let p = 10; p <= 100; p += 20) {
-          setProgress(p);
-          await new Promise((r) => setTimeout(r, 80));
-        }
-        const isPhoto = selectedFile.type.startsWith("image/");
-        const newFile: GoogleDriveMediaFile = {
-          id: `local-${Date.now()}`,
-          driveFileId: `local-drv-${Date.now()}`,
-          name: selectedFile.name,
-          kind: isPhoto ? "photo" : "video",
-          mimeType: selectedFile.type || "video/mp4",
-          folder: defaultFolderName,
-          folderId: targetFolderId,
-          size: `${(selectedFile.size / 1024 / 1024).toFixed(1)} MB`,
-          rawSizeBytes: selectedFile.size,
-          updatedLabel: "Just now",
-          starred: false,
-          trashed: false,
-          canDownload: true,
-          accent: isPhoto ? "teal" : "blue",
-          uploadText: caption.trim(),
-          revision: 1,
-          thumbnailUrl: null,
-        };
-        onUploadComplete(newFile);
+        throw new Error("Connect Google Drive before uploading.");
       }
       setSelectedFile(null);
       setCaption("");
@@ -1142,7 +1042,7 @@ function ConnectDriveDialog({
   onConnected: (token: string, user: GoogleDriveUser) => void;
 }) {
   const [tokenInput, setTokenInput] = useState("");
-  const [clientId, setClientId] = useState(getStoredGoogleClientId());
+  const [clientId] = useState(getStoredGoogleClientId());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1189,7 +1089,7 @@ function ConnectDriveDialog({
               const user = await fetchGoogleUserInfo(resp.access_token);
               setStoredDriveSession(resp.access_token, user);
               onConnected(resp.access_token, user);
-            } catch (e) {
+            } catch {
               setError("Authorized, but could not fetch user info.");
             }
           } else if (resp.error) {
@@ -1206,7 +1106,7 @@ function ConnectDriveDialog({
         setError("Google Identity Services script is loading. You can also paste an Access Token directly below.");
         setIsLoading(false);
       }
-    } catch (err) {
+    } catch {
       setError("Please paste a Google OAuth Access Token below for instant connection.");
       setIsLoading(false);
     }
@@ -1392,8 +1292,8 @@ function AdminLoginDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [email, setEmail] = useState("admin@gmail.com");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -1434,7 +1334,7 @@ function AdminLoginDialog({
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@gmail.com"
+              placeholder="you@example.com"
               required
               className="bg-white/5 border-white/10 text-white text-xs"
             />
@@ -1447,13 +1347,10 @@ function AdminLoginDialog({
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="admin123"
+              placeholder="Password"
               required
               className="bg-white/5 border-white/10 text-white text-xs"
             />
-          </div>
-          <div className="rounded-md bg-white/5 p-2.5 text-xs text-slate-400 border border-white/10">
-            💡 <strong>Admin Credentials:</strong> <code>admin@gmail.com</code> / <code>admin123</code>
           </div>
           <Button type="submit" disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 text-white">
             {loading ? "Signing in…" : "Sign In"}

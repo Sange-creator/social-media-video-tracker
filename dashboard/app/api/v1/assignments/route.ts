@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mediaDTO, requireAuth, routeError, serviceSupabase } from "@/lib/server";
+import { mediaDTO, requireAuth, routeError, supabase } from "@/lib/server";
 
 type Membership = { workspace_id: string; role: string };
 type ContentAccountRow = {
@@ -26,7 +26,8 @@ type AssignmentRow = {
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
-    const memberships = await serviceSupabase<Membership[]>(
+    const memberships = await supabase<Membership[]>(
+      auth,
       `workspace_members?user_id=eq.${auth.userId}&select=workspace_id,role&limit=1`
     );
     const member = memberships[0];
@@ -39,7 +40,7 @@ export async function GET(request: NextRequest) {
     const accountQuery = accountId
       ? `content_accounts?workspace_id=eq.${member.workspace_id}&id=eq.${accountId}&select=*`
       : `content_accounts?workspace_id=eq.${member.workspace_id}&paused=eq.false&select=*`;
-    const accounts = await serviceSupabase<ContentAccountRow[]>(accountQuery);
+    const accounts = await supabase<ContentAccountRow[]>(auth, accountQuery);
 
     const results: Array<{
       account: ContentAccountRow;
@@ -47,18 +48,21 @@ export async function GET(request: NextRequest) {
     }> = [];
 
     for (const acc of accounts) {
-      let assignments = await serviceSupabase<AssignmentRow[]>(
+      let assignments = await supabase<AssignmentRow[]>(
+        auth,
         `assignments?account_id=eq.${acc.id}&day_key=eq.${dayKey}&order=slot.asc&select=*`
       );
 
-      // If no assignments for today, transactionally generate them from available videos in this account's grant
-      if (assignments.length === 0 && !acc.paused) {
-        const availableMedia = await serviceSupabase<Record<string, unknown>[]>(
-          `accessible_media?select=*&mime_type=like.video%25&order=updated_at.desc&limit=50`
+      // If no assignments for today, generate them from available videos in this account's grant
+      if (assignments.length === 0 && !acc.paused && ["owner", "editor"].includes(member.role)) {
+        const availableMedia = await supabase<Record<string, unknown>[]>(
+            auth,
+          `media_items?select=*,media_access_paths!inner(grant_id)&media_access_paths.grant_id=eq.${acc.grant_id}&mime_type=like.video%25&trashed=eq.false&order=updated_at.desc&limit=1000`
         );
 
         // Filter out media already completed in previous days for this account
-        const previousAssignments = await serviceSupabase<{ media_id: string }[]>(
+        const previousAssignments = await supabase<{ media_id: string }[]>(
+            auth,
           `assignments?account_id=eq.${acc.id}&state=eq.completed&select=media_id`
         );
         const usedMediaIds = new Set(previousAssignments.map((p) => p.media_id));
@@ -73,7 +77,7 @@ export async function GET(request: NextRequest) {
         }));
 
         if (newRows.length > 0) {
-          assignments = await serviceSupabase<AssignmentRow[]>("assignments", {
+          assignments = await supabase<AssignmentRow[]>(auth, "assignments", {
             method: "POST",
             headers: { prefer: "return=representation" },
             body: JSON.stringify(newRows),
@@ -85,7 +89,8 @@ export async function GET(request: NextRequest) {
       const mediaIds = assignments.map((a) => `"${a.media_id}"`).join(",");
       const mediaMap = new Map<string, ReturnType<typeof mediaDTO>>();
       if (mediaIds.length > 0) {
-        const mediaItems = await serviceSupabase<Record<string, unknown>[]>(
+        const mediaItems = await supabase<Record<string, unknown>[]>(
+            auth,
           `media_items?id=in.(${mediaIds})&select=*`
         );
         for (const item of mediaItems) {
@@ -119,32 +124,41 @@ export async function POST(request: NextRequest) {
       action?: "complete" | "replace";
     };
 
-    const members = await serviceSupabase<Membership[]>(
+    const members = await supabase<Membership[]>(
+      auth,
       `workspace_members?user_id=eq.${auth.userId}&select=workspace_id,role&limit=1`
     );
     const member = members[0];
     if (!member) return NextResponse.json({ error: "Access denied" }, { status: 403 });
 
     if (body.action === "replace" && body.assignmentId) {
-      const existing = await serviceSupabase<AssignmentRow[]>(
-        `assignments?id=eq.${body.assignmentId}&select=*&limit=1`
+      const existing = await supabase<AssignmentRow[]>(
+        auth,
+        `assignments?id=eq.${encodeURIComponent(body.assignmentId)}&select=*&limit=1`
       );
       if (!existing[0]) return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
       const current = existing[0];
 
       // Find an unused replacement candidate
-      const assignedMedia = await serviceSupabase<{ media_id: string }[]>(
+      const assignedMedia = await supabase<{ media_id: string }[]>(
+        auth,
         `assignments?account_id=eq.${current.account_id}&select=media_id`
       );
       const assignedIds = new Set(assignedMedia.map((a) => a.media_id));
 
-      const candidates = await serviceSupabase<Record<string, unknown>[]>(
-        `accessible_media?select=*&mime_type=like.video%25&order=updated_at.desc&limit=50`
+      const accountRows = await supabase<ContentAccountRow[]>(auth,
+        `content_accounts?id=eq.${current.account_id}&select=*&limit=1`);
+      const account = accountRows[0];
+      if (!account) return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      const candidates = await supabase<Record<string, unknown>[]>(
+        auth,
+        `media_items?select=*,media_access_paths!inner(grant_id)&media_access_paths.grant_id=eq.${account.grant_id}&mime_type=like.video%25&trashed=eq.false&order=updated_at.desc&limit=1000`
       );
       const replacement = candidates.find((c) => !assignedIds.has(String(c.id)));
       if (!replacement) return NextResponse.json({ error: "No available replacement video found" }, { status: 409 });
 
-      const updated = await serviceSupabase<AssignmentRow[]>(
+      const updated = await supabase<AssignmentRow[]>(
+        auth,
         `assignments?id=eq.${current.id}&select=*`,
         {
           method: "PATCH",
@@ -164,13 +178,23 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    if (!body.assignmentId && !body.accountId && body.mediaId) {
+      const matches = await supabase<AssignmentRow[]>(auth,
+        `assignments?media_id=eq.${encodeURIComponent(body.mediaId)}&order=assigned_at.desc&limit=2`);
+      if (matches.length !== 1) {
+        return NextResponse.json({ error: "Specify an account or assignment for this media" }, { status: 409 });
+      }
+      body.assignmentId = matches[0].id;
+    }
+
     // Default action: toggle completion
     const isCompleted = body.completed !== false;
     let assignment: AssignmentRow | null = null;
 
     if (body.assignmentId) {
-      const updated = await serviceSupabase<AssignmentRow[]>(
-        `assignments?id=eq.${body.assignmentId}&select=*`,
+      const updated = await supabase<AssignmentRow[]>(
+        auth,
+        `assignments?id=eq.${encodeURIComponent(body.assignmentId)}&select=*`,
         {
           method: "PATCH",
           headers: { prefer: "return=representation" },
@@ -183,8 +207,9 @@ export async function POST(request: NextRequest) {
       assignment = updated[0] ?? null;
     } else if (body.accountId && body.mediaId) {
       const today = new Date().toISOString().split("T")[0];
-      const updated = await serviceSupabase<AssignmentRow[]>(
-        `assignments?account_id=eq.${body.accountId}&media_id=eq.${body.mediaId}&day_key=eq.${today}&select=*`,
+      const updated = await supabase<AssignmentRow[]>(
+        auth,
+        `assignments?account_id=eq.${encodeURIComponent(body.accountId)}&media_id=eq.${encodeURIComponent(body.mediaId)}&day_key=eq.${today}&select=*`,
         {
           method: "PATCH",
           headers: { prefer: "return=representation" },

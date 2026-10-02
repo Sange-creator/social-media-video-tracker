@@ -196,7 +196,7 @@ export async function POST(request: NextRequest) {
               workspace_id: member.workspace_id,
               drive_file_id: copied.id,
               name: copied.name,
-              mimeType: copied.mimeType ?? "video/mp4",
+              mime_type: copied.mimeType ?? "video/mp4",
               size_bytes: copied.size ? Number(copied.size) : null,
               folder_path: body.destinationFolderId ?? item.folder_path,
               upload_text: uploadText,

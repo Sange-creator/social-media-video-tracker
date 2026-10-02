@@ -58,7 +58,7 @@ Suggestions that are not completed can carry forward. Completed videos remain in
 ### Downloads and previews
 
 - High-resolution Drive thumbnails throughout Today and Library.
-- Tap-to-play streaming previews with zero-latency player initialization.
+- Tap-to-play streaming previews with loading and recovery states.
 - Automatic local-file fallback when AVPlayer rejects cross-domain redirected Drive streams.
 - Full playback controls including play/pause replay handling, instant range seeking, speed control (1.0x - 2.0x), volume slider, and audio route detection.
 - Audio session set to `.playback` category so sound plays cleanly regardless of the hardware silent switch.
@@ -162,8 +162,7 @@ not video files.
   video and event history during a tab tap.
 - Analytics snapshots are rebuilt in a private SwiftData context, away from the
   UI thread, while the last valid snapshot remains visible.
-- Native tab contents stay prepared so switching between Today, Analytics,
-  Library, Accounts, and Settings does not reconstruct each screen.
+- Native screens use stable SwiftUI identity and semantic type sizes.
 - Drive scans save only actual metadata changes. An unchanged scan does not
   invalidate every SwiftData-backed view.
 - Large Drive folders are reconciled in cooperative batches so scrolling and

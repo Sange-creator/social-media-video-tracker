@@ -21,6 +21,7 @@ struct DriveItem: Decodable, Identifiable, Sendable {
     let modifiedTime: String?
     let thumbnailLink: String?
     let resourceKey: String?
+    var description: String? = nil
     let capabilities: DriveCapabilities?
     let shortcutDetails: DriveShortcutDetails?
 
@@ -152,6 +153,14 @@ enum DriveAPIError: LocalizedError {
 }
 
 @MainActor
+protocol DriveAuthorization {
+    var userID: String? { get }
+    func accessToken() async throws -> String
+}
+
+extension GoogleAuthService: DriveAuthorization {}
+
+@MainActor
 final class DriveAPIClient {
     static let dateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -159,7 +168,7 @@ final class DriveAPIClient {
         return formatter
     }()
 
-    private let auth: GoogleAuthService
+    private let auth: any DriveAuthorization
     private let session: URLSession
     private let decoder = JSONDecoder()
 
@@ -172,10 +181,12 @@ final class DriveAPIClient {
         return URLSession(configuration: config)
     }
 
-    init(auth: GoogleAuthService, session: URLSession? = nil) {
+    init(auth: any DriveAuthorization, session: URLSession? = nil) {
         self.auth = auth
         self.session = session ?? Self.makeDefaultSession()
     }
+
+    var currentUserID: String? { auth.userID }
 
     func item(id: String, resourceKey: String? = nil) async throws -> DriveItem {
         var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(id)")
@@ -274,8 +285,11 @@ final class DriveAPIClient {
     /// Downloads a foreground-only temporary copy for playback. This does not
     /// change tracker state or save the video to Photos.
     func previewFile(for item: VideoAsset) async throws -> URL {
+        let sourceExtension = (item.name as NSString).pathExtension
         let request = try await downloadRequest(for: item)
         let (temporaryURL, response) = try await session.download(for: request)
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try Task.checkCancellation()
         guard
             let http = response as? HTTPURLResponse,
             (200 ... 299).contains(http.statusCode)
@@ -285,7 +299,6 @@ final class DriveAPIClient {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("DriveTrackerPreviews", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let sourceExtension = (item.name as NSString).pathExtension
         let destination = directory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(sourceExtension.isEmpty ? "mp4" : sourceExtension)
@@ -648,6 +661,6 @@ final class DriveAPIClient {
     }
 
     private static let fields =
-        "id,name,mimeType,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey," +
+        "id,name,mimeType,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey,description," +
         "capabilities(canDownload),shortcutDetails(targetId,targetMimeType,targetResourceKey)"
 }

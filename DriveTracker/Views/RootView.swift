@@ -2,34 +2,23 @@ import SwiftData
 import SwiftUI
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     @EnvironmentObject private var auth: GoogleAuthService
     @Query private var accounts: [TikTokAccount]
-    @State private var dashboardIsReady = false
 
     var body: some View {
         rootContent
             .task {
                 await state.start(context: context)
             }
-            .task(id: auth.isSignedIn) {
-                guard auth.isSignedIn else {
+            .task(id: "\(scenePhase)-\(auth.userID ?? "signed-out")-\(auth.isRestoring)") {
+                guard scenePhase == .active, auth.isSignedIn, !auth.isRestoring else {
                     state.stopDriveChangeMonitor()
                     return
                 }
                 state.startDriveChangeMonitor(context: context)
-            }
-            .task(id: hasConfiguredAccount) {
-                guard hasConfiguredAccount else {
-                    dashboardIsReady = false
-                    return
-                }
-
-                dashboardIsReady = false
-                await Task.yield()
-                guard !Task.isCancelled else { return }
-                dashboardIsReady = true
             }
             .overlay(alignment: .bottom) {
                 Group {
@@ -70,19 +59,15 @@ struct RootView: View {
             .tint(TrackerPalette.accent)
     }
 
-    private var rootContent: AnyView {
+    @ViewBuilder
+    private var rootContent: some View {
         if auth.isRestoring {
-            return AnyView(
-                LaunchView(
-                    title: "Social Media Video Tracker",
-                    detail: "Restoring your tracker…"
-                )
-            )
+            LaunchView(title: "Social Media Video Tracker", detail: "Restoring your tracker…")
+        } else if !hasConfiguredAccount {
+            OnboardingView()
+        } else {
+            MainTabView()
         }
-        if !hasConfiguredAccount {
-            return AnyView(OnboardingView())
-        }
-        return AnyView(MainTabView())
     }
 
     private var hasConfiguredAccount: Bool {

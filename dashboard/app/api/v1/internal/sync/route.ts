@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { googleAccessToken, routeError, serviceSupabase } from "@/lib/server";
+import { scanDriveFolder } from "@/lib/driveScan";
 
 type SyncJob = {
   id: string;
@@ -25,9 +26,11 @@ export async function POST(request: NextRequest) {
   try {
     const cronSecret = process.env.CRON_SECRET;
     const authHeader = request.headers.get("authorization") || request.headers.get("x-cron-secret");
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && authHeader !== cronSecret) {
+    if (!cronSecret || (authHeader !== `Bearer ${cronSecret}` && authHeader !== cronSecret)) {
       return NextResponse.json({ error: "Unauthorized worker invocation" }, { status: 401 });
     }
+
+    await serviceSupabase("rpc/enqueue_drive_repairs", { method: "POST", body: "{}" });
 
     // 1. Fetch pending sync jobs bounded to 10 at a time
     const jobs = await serviceSupabase<SyncJob[]>(
@@ -37,10 +40,11 @@ export async function POST(request: NextRequest) {
     let processedCount = 0;
 
     for (const job of jobs) {
-      await serviceSupabase(`sync_jobs?id=eq.${job.id}`, {
+      const claimed = await serviceSupabase<SyncJob[]>(`sync_jobs?id=eq.${job.id}&state=eq.pending&select=*`, {
         method: "PATCH",
         body: JSON.stringify({ state: "running", updated_at: new Date().toISOString() }),
       });
+      if (!claimed.length) continue;
 
       try {
         const connections = await serviceSupabase<Connection[]>(
@@ -55,121 +59,33 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        const scanStartedAt = new Date().toISOString();
         const token = await googleAccessToken(connection.encrypted_refresh_token);
 
-        // Fetch or initialize change cursor
-        let cursor = connection.change_cursor;
-        if (!cursor) {
-          const startRes = await fetch(
-            "https://www.googleapis.com/drive/v3/changes/startPageToken?supportsAllDrives=true",
-            { headers: { authorization: `Bearer ${token}` } }
-          );
-          if (startRes.ok) {
-            const startData = (await startRes.json()) as { startPageToken: string };
-            cursor = startData.startPageToken;
-          }
-        }
-
-        if (cursor) {
-          const changesUrl = new URL("https://www.googleapis.com/drive/v3/changes");
-          changesUrl.searchParams.set("pageToken", cursor);
-          changesUrl.searchParams.set("supportsAllDrives", "true");
-          changesUrl.searchParams.set("includeItemsFromAllDrives", "true");
-          changesUrl.searchParams.set("pageSize", "100");
-          changesUrl.searchParams.set(
-            "fields",
-            "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,parents,trashed,starred,modifiedTime))"
-          );
-
-          const changesRes = await fetch(changesUrl.toString(), {
-            headers: { authorization: `Bearer ${token}` },
+        // Capture the token before scanning. New files created during the
+        // scan remain pending for the next watch notification/repair scan.
+        const startRes = await fetch(
+          "https://www.googleapis.com/drive/v3/changes/startPageToken?supportsAllDrives=true",
+          { cache: "no-store", headers: { authorization: `Bearer ${token}` } }
+        );
+        if (!startRes.ok) throw new Error("Could not establish Drive sync cursor");
+        const { startPageToken: cursor } = await startRes.json() as { startPageToken: string };
+        if (!cursor) throw new Error("Invalid Drive sync cursor");
+        const grants = await serviceSupabase<Array<{ id: string; drive_folder_id: string; folder_name: string }>>(
+          `folder_grants?connection_id=eq.${connection.id}&select=id,drive_folder_id,folder_name`
+        );
+        for (const grant of grants) {
+          const files = await scanDriveFolder(token, grant.drive_folder_id, grant.folder_name);
+          // The database atomically reconciles paths and metadata, preserving
+          // independently edited upload text and avoiding unchanged writes.
+          await serviceSupabase("rpc/reconcile_drive_grant", {
+            method: "POST",
+            body: JSON.stringify({ p_workspace_id: connection.workspace_id, p_grant_id: grant.id, p_files: files }),
           });
-
-          if (changesRes.ok) {
-            const changesData = (await changesRes.json()) as {
-              nextPageToken?: string;
-              newStartPageToken?: string;
-              changes?: Array<{
-                fileId: string;
-                removed?: boolean;
-                file?: {
-                  id: string;
-                  name: string;
-                  mimeType: string;
-                  size?: string;
-                  parents?: string[];
-                  trashed?: boolean;
-                  starred?: boolean;
-                  modifiedTime?: string;
-                };
-              }>;
-            };
-
-            for (const change of changesData.changes ?? []) {
-              if (change.removed || change.file?.trashed) {
-                await serviceSupabase(
-                  `media_items?workspace_id=eq.${connection.workspace_id}&drive_file_id=eq.${change.fileId}`,
-                  {
-                    method: "PATCH",
-                    body: JSON.stringify({ trashed: true, updated_at: new Date().toISOString() }),
-                  }
-                );
-              } else if (change.file) {
-                const f = change.file;
-                const isMedia = f.mimeType.startsWith("video/") || f.mimeType.startsWith("image/");
-                if (isMedia) {
-                  // Upsert media item preserving upload_text
-                  const existing = await serviceSupabase<Array<{ id: string; upload_text: string }>>(
-                    `media_items?workspace_id=eq.${connection.workspace_id}&drive_file_id=eq.${f.id}&select=id,upload_text&limit=1`
-                  );
-
-                  if (existing[0]) {
-                    await serviceSupabase(`media_items?id=eq.${existing[0].id}`, {
-                      method: "PATCH",
-                      body: JSON.stringify({
-                        name: f.name,
-                        mime_type: f.mimeType,
-                        size_bytes: f.size ? Number(f.size) : null,
-                        folder_path: f.parents?.[0] ?? "My Drive",
-                        starred: Boolean(f.starred),
-                        trashed: Boolean(f.trashed),
-                        drive_modified_at: f.modifiedTime ?? new Date().toISOString(),
-                        updated_at: new Date().toISOString(),
-                      }),
-                    });
-                  } else {
-                    await serviceSupabase("media_items", {
-                      method: "POST",
-                      headers: { prefer: "resolution=ignore-duplicates" },
-                      body: JSON.stringify({
-                        workspace_id: connection.workspace_id,
-                        drive_file_id: f.id,
-                        name: f.name,
-                        mime_type: f.mimeType,
-                        size_bytes: f.size ? Number(f.size) : null,
-                        folder_path: f.parents?.[0] ?? "My Drive",
-                        starred: Boolean(f.starred),
-                        trashed: false,
-                        upload_text: "",
-                        upload_text_revision: 0,
-                        drive_modified_at: f.modifiedTime ?? new Date().toISOString(),
-                      }),
-                    });
-                  }
-                }
-              }
-            }
-
-            const nextCursor = changesData.newStartPageToken || changesData.nextPageToken || cursor;
-            await serviceSupabase(`drive_connections?id=eq.${connection.id}`, {
-              method: "PATCH",
-              body: JSON.stringify({
-                change_cursor: nextCursor,
-                updated_at: new Date().toISOString(),
-              }),
-            });
-          }
         }
+        await serviceSupabase(`drive_connections?id=eq.${connection.id}`, {
+          method: "PATCH", body: JSON.stringify({ change_cursor: cursor, last_sync_at: scanStartedAt, updated_at: new Date().toISOString() }),
+        });
 
         // 2. Check and renew Drive watch channel if expiring within 24 hours
         const expiresAt = connection.watch_expires_at ? new Date(connection.watch_expires_at).getTime() : 0;

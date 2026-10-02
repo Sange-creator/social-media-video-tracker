@@ -53,6 +53,42 @@ final class AssignmentEngineTests: XCTestCase {
         XCTAssertEqual(account.videos.filter { $0.status == .assigned }.count, 3)
     }
 
+    func testPhotoCompletionDoesNotConsumeDailyVideoQuota() throws {
+        let account = makeAccount(videoCount: 5, quota: 3)
+        let photo = VideoAsset(driveFileID: "photo", accountFolderID: account.driveFolderID,
+                               googleUserID: account.googleUserID, name: "image.jpg", mimeType: "image/jpeg", account: account)
+        photo.uploadedAt = .now
+        photo.downloadedAt = .now
+        context.insert(photo)
+        try context.save()
+        let summary = try engine.ensureAssignments(for: account, context: context)
+        XCTAssertEqual(summary.added, 3)
+        XCTAssertEqual(summary.outstanding, 3)
+    }
+
+    func testUnchangedAssignmentsDoNotWriteAccountAgain() throws {
+        let account = makeAccount(videoCount: 10, quota: 3)
+        _ = try engine.ensureAssignments(for: account, context: context)
+        let updatedAt = account.updatedAt
+        _ = try engine.ensureAssignments(for: account, context: context)
+        XCTAssertEqual(account.updatedAt, updatedAt)
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testRemovedSuggestionIsReplacedWithoutLosingHistory() throws {
+        let account = makeAccount(videoCount: 5, quota: 1)
+        _ = try engine.ensureAssignments(for: account, context: context)
+        let original = try XCTUnwrap(account.videos.first { $0.status == .assigned })
+        let oldAssignment = try XCTUnwrap(original.activeAssignment)
+        original.isMissingFromDrive = true
+        try context.save()
+        let summary = try engine.ensureAssignments(for: account, context: context)
+        XCTAssertEqual(summary.added, 1)
+        XCTAssertFalse(oldAssignment.isActive)
+        XCTAssertTrue(original.assignments.contains { $0.id == oldAssignment.id })
+        XCTAssertEqual(account.videos.filter { $0.status == .assigned && !$0.isMissingFromDrive }.count, 1)
+    }
+
     func testUploadedTodayDoesNotCauseFourthSuggestion() throws {
         let account = makeAccount(videoCount: 10, quota: 3)
         _ = try engine.ensureAssignments(for: account, context: context)

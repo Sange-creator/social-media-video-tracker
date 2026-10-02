@@ -46,6 +46,20 @@ export function getStoredDriveToken(): string | null {
   return localStorage.getItem(DRIVE_TOKEN_KEY);
 }
 
+export function subscribeDriveSession(listener: () => void): () => void {
+  window.addEventListener("gdrive-auth-change", listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    window.removeEventListener("gdrive-auth-change", listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
+export function getStoredDriveUserSnapshot(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(DRIVE_USER_KEY);
+}
+
 export function getStoredDriveUser(): GoogleDriveUser | null {
   if (typeof window === "undefined") return null;
   const raw = localStorage.getItem(DRIVE_USER_KEY);
@@ -99,6 +113,27 @@ export async function fetchGoogleUserInfo(token: string): Promise<GoogleDriveUse
   };
 }
 
+async function listAllDrivePages<T>(url: URL, token: string): Promise<T[]> {
+  const files: T[] = [];
+  let pageToken: string | undefined;
+  do {
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(response.status === 401
+        ? "Google Drive session expired. Reconnect your account."
+        : `Google Drive could not load files (${response.status}).`);
+    }
+    const page = await response.json() as { files?: T[]; nextPageToken?: string };
+    files.push(...(page.files ?? []));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return files;
+}
+
 export async function fetchDriveFolders(
   token: string,
   parentId?: string | null
@@ -107,50 +142,42 @@ export async function fetchDriveFolders(
   const q = `'${pId.replace(/'/g, "\\'")}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
   const url = new URL("https://www.googleapis.com/drive/v3/files");
   url.searchParams.set("q", q);
-  url.searchParams.set("fields", "files(id, name, parents, modifiedTime)");
+  url.searchParams.set("fields", "nextPageToken,files(id, name, parents, modifiedTime)");
   url.searchParams.set("pageSize", "100");
   url.searchParams.set("orderBy", "name");
   url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("includeItemsFromAllDrives", "true");
 
-  const res = await fetch(url.toString(), {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`Google Drive folder error: ${errorText || res.statusText}`);
-  }
-  const data = (await res.json()) as { files?: GoogleDriveFolder[] };
-  return data.files ?? [];
+  return listAllDrivePages<GoogleDriveFolder>(url, token);
+
 }
 
 export async function fetchDriveMediaFiles(
   token: string,
   folderId?: string | null,
-  folderName = "My Drive"
+  folderName = "My Drive",
+  collection: "all" | "starred" | "trash" = "all"
 ): Promise<GoogleDriveMediaFile[]> {
   const pId = folderId && folderId !== "root" ? folderId : "root";
-  const q = `'${pId.replace(/'/g, "\\'")}' in parents and (mimeType contains 'video/' or mimeType contains 'image/') and trashed = false`;
+  const conditions = [
+    "(mimeType contains 'video/' or mimeType contains 'image/')",
+    `trashed = ${collection === "trash" ? "true" : "false"}`,
+  ];
+  if (collection === "all") conditions.push(`'${pId.replace(/'/g, "\\'")}' in parents`);
+  if (collection === "starred") conditions.push("starred = true");
+  const q = conditions.join(" and ");
   const url = new URL("https://www.googleapis.com/drive/v3/files");
   url.searchParams.set("q", q);
   url.searchParams.set(
     "fields",
-    "files(id, name, mimeType, size, modifiedTime, thumbnailLink, webContentLink, webViewLink, description, starred, trashed, capabilities)"
+    "nextPageToken,files(id, name, mimeType, size, modifiedTime, thumbnailLink, webContentLink, webViewLink, description, starred, trashed, capabilities)"
   );
   url.searchParams.set("pageSize", "100");
   url.searchParams.set("orderBy", "modifiedTime desc");
   url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("includeItemsFromAllDrives", "true");
 
-  const res = await fetch(url.toString(), {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
-    throw new Error(`Google Drive media error: ${errorText || res.statusText}`);
-  }
-  const data = (await res.json()) as {
-    files?: Array<{
+  const files = await listAllDrivePages<{
       id: string;
       name: string;
       mimeType: string;
@@ -163,10 +190,9 @@ export async function fetchDriveMediaFiles(
       starred?: boolean;
       trashed?: boolean;
       capabilities?: { canDownload?: boolean };
-    }>;
-  };
+    }>(url, token);
 
-  return (data.files ?? []).map((file) => {
+  return files.map((file) => {
     const rawSizeBytes = file.size ? Number(file.size) : 0;
     const mime = file.mimeType || "";
     const isPhoto = mime.startsWith("image/");
@@ -280,7 +306,7 @@ export async function uploadToGoogleDrive(
             thumbnailUrl: null,
             webViewLink: res.webViewLink,
           });
-        } catch (e) {
+        } catch {
           reject(new Error("Failed to parse upload response"));
         }
       } else {
@@ -318,7 +344,7 @@ export async function updateDriveDescription(
   }
 }
 
-export async function deleteDriveFile(token: string, fileId: string): Promise<void> {
+export async function deleteDriveFile(token: string, fileId: string, trashed = true): Promise<void> {
   // Move to trash
   const res = await fetch(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
@@ -328,7 +354,7 @@ export async function deleteDriveFile(token: string, fileId: string): Promise<vo
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ trashed: true }),
+      body: JSON.stringify({ trashed }),
     }
   );
   if (!res.ok) {

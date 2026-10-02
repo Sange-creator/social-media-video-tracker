@@ -65,6 +65,21 @@ final class WorkspaceSyncTests: XCTestCase {
         XCTAssertEqual(decoded.first?.revision, 4)
     }
 
+    func testOutboxOwnershipAndAcknowledgmentProtectOfflineEdits() throws {
+        var item = WorkspaceOutboxItem(id: UUID(), kind: .saveUploadText, mediaID: "media",
+            text: "Draft", revision: 2, completed: nil, createdAt: .now)
+        XCTAssertFalse(item.canReplay(for: "user-a"))
+        item.googleUserID = "user-a"
+        XCTAssertTrue(item.canReplay(for: "user-a"))
+        XCTAssertFalse(item.canReplay(for: "user-b"))
+        let decoded = try JSONDecoder().decode(WorkspaceOutboxItem.self, from: JSONEncoder().encode(item))
+        XCTAssertEqual(decoded.googleUserID, "user-a")
+        let remote = WorkspaceMediaRecord(id: "media", driveFileId: "file", uploadText: "Draft", revision: 3)
+        XCTAssertTrue(remote.acknowledges(text: "Draft", revision: 3))
+        XCTAssertFalse(remote.acknowledges(text: "New unsent draft", revision: 3))
+        XCTAssertFalse(remote.acknowledges(text: "Draft", revision: 4))
+    }
+
     func testUploadTextSyncStateTransitions() {
         let video = VideoAsset(
             driveFileID: "drive-99",

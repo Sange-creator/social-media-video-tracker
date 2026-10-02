@@ -818,3 +818,9 @@ button, input, textarea, select {
     padding: 0 16px;
   }
 }
+
+/* Skip layout and paint of media cards outside the scrolling viewport. */
+.media-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
+}

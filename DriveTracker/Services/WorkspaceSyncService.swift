@@ -5,6 +5,10 @@ nonisolated struct WorkspaceMediaRecord: Decodable, Sendable {
     let driveFileId: String
     let uploadText: String
     let revision: Int
+
+    func acknowledges(text: String, revision localRevision: Int) -> Bool {
+        uploadText == text && revision >= localRevision
+    }
 }
 
 nonisolated struct WorkspaceAssignmentRecord: Decodable, Sendable {
@@ -42,6 +46,9 @@ nonisolated struct WorkspaceOutboxItem: Codable, Sendable, Identifiable {
     let revision: Int?
     let completed: Bool?
     let createdAt: Date
+    var googleUserID: String? = nil
+
+    func canReplay(for userID: String) -> Bool { googleUserID == userID }
 }
 
 private nonisolated struct SupabaseTokenResponse: Decodable {
@@ -56,6 +63,7 @@ actor WorkspaceSyncService {
     private let supabaseURL: URL?
     private let supabaseAnonKey: String?
     private var bearerToken: String?
+    private var bearerUserID: String?
     private var tokenExpiresAt: Date = .distantPast
 
     init(bundle: Bundle = .main, session: URLSession = .shared) {
@@ -107,7 +115,9 @@ actor WorkspaceSyncService {
 
     func drainOutbox(items: [WorkspaceOutboxItem], auth: GoogleAuthService) async -> [UUID] {
         var successfulIDs: [UUID] = []
+        guard let userID = await auth.userID else { return [] }
         for item in items {
+            guard item.canReplay(for: userID), await auth.userID == userID else { continue }
             do {
                 switch item.kind {
                 case .saveUploadText:
@@ -119,7 +129,10 @@ actor WorkspaceSyncService {
                 }
                 successfulIDs.append(item.id)
             } catch {
-                // If conflict or fatal, or still offline, stop draining
+                let failure = error as NSError
+                if failure.domain == "WorkspaceSync", [403, 404, 409].contains(failure.code) {
+                    continue // One unresolved edit must not block other files.
+                }
                 break
             }
         }
@@ -136,7 +149,11 @@ actor WorkspaceSyncService {
     }
 
     private func workspaceToken(auth: GoogleAuthService) async throws -> String {
-        if let bearerToken, tokenExpiresAt.timeIntervalSinceNow > 60 { return bearerToken }
+        let userID = await auth.userID
+        guard let userID else { throw GoogleAuthError.notSignedIn }
+        if bearerUserID == userID, let bearerToken, tokenExpiresAt.timeIntervalSinceNow > 60 {
+            return bearerToken
+        }
         guard let supabaseURL, let supabaseAnonKey else { throw URLError(.unsupportedURL) }
         let googleIDToken = try await auth.idToken()
         var request = URLRequest(url: supabaseURL.appending(path: "/auth/v1/token").appending(queryItems: [URLQueryItem(name: "grant_type", value: "id_token")]))
@@ -147,6 +164,8 @@ actor WorkspaceSyncService {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let token = try JSONDecoder().decode(SupabaseTokenResponse.self, from: data)
+        guard await auth.userID == userID else { throw GoogleAuthError.notSignedIn }
+        bearerUserID = userID
         bearerToken = token.accessToken
         tokenExpiresAt = Date().addingTimeInterval(TimeInterval(token.expiresIn))
         return token.accessToken

@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 
-const SECRET = process.env.ADMIN_SESSION_SECRET || "social-media-tracker-admin-auth-secret-key-2026";
-const ADMIN_EMAIL = "admin@gmail.com";
-const ADMIN_PASSWORD = "admin123";
+const SECRET = process.env.ADMIN_SESSION_SECRET;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 export interface AdminPayload {
   userId: string;
@@ -12,11 +12,12 @@ export interface AdminPayload {
 }
 
 export function validateAdminCredentials(email?: string, pass?: string): boolean {
-  if (!email || !pass) return false;
-  return email.trim().toLowerCase() === ADMIN_EMAIL && pass.trim() === ADMIN_PASSWORD;
+  if (!email || !pass || !ADMIN_EMAIL || !ADMIN_PASSWORD || !SECRET || SECRET.length < 32) return false;
+  return email.trim().toLowerCase() === ADMIN_EMAIL && pass === ADMIN_PASSWORD;
 }
 
-export function createAdminToken(userId = "admin-user", email = ADMIN_EMAIL): string {
+export function createAdminToken(userId = "admin-user", email = ADMIN_EMAIL ?? ""): string {
+  if (!SECRET || SECRET.length < 32 || !email) throw new Error("Missing secure admin authentication configuration");
   const payload: AdminPayload = {
     userId,
     email,
@@ -30,7 +31,7 @@ export function createAdminToken(userId = "admin-user", email = ADMIN_EMAIL): st
 }
 
 export function verifyAdminToken(token: string): AdminPayload | null {
-  if (!token.startsWith("admin.")) return null;
+  if (!SECRET || SECRET.length < 32 || !token.startsWith("admin.")) return null;
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [, b64, signature] = parts;
@@ -44,7 +45,8 @@ export function verifyAdminToken(token: string): AdminPayload | null {
       return null;
     }
     const decoded = JSON.parse(Buffer.from(b64, "base64url").toString("utf-8")) as AdminPayload;
-    if (typeof decoded.exp === "number" && decoded.exp < Date.now()) {
+    if (decoded.userId !== "admin-user" || decoded.role !== "admin" || decoded.email !== ADMIN_EMAIL ||
+        typeof decoded.exp !== "number" || !Number.isFinite(decoded.exp) || decoded.exp <= Date.now()) {
       return null;
     }
     return decoded;

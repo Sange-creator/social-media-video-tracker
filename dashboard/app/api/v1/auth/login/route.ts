@@ -13,13 +13,13 @@ export async function POST(request: NextRequest) {
 
     // 1. Check for admin credentials
     if (validateAdminCredentials(email, password)) {
-      const token = createAdminToken("admin-user", "admin@gmail.com");
+      const token = createAdminToken("admin-user", email);
       return NextResponse.json({
         ok: true,
         token,
         user: {
           id: "admin-user",
-          email: "admin@gmail.com",
+          email,
           role: "admin",
           name: "Workspace Admin",
         },
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: "Invalid email or password. Sign in with admin@gmail.com / admin123",
+        error: "Invalid email or password.",
       },
       { status: 401 }
     );

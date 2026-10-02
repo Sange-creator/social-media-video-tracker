@@ -9,123 +9,40 @@ struct LibraryView: View {
     @State private var search = ""
 
     private var filteredAccounts: [TikTokAccount] {
-        guard !search.isEmpty else { return accounts }
-        return accounts.filter {
+        accounts.filter {
+            $0.modelContext != nil && !$0.isDeleted && (search.isEmpty ||
             $0.displayName.localizedCaseInsensitiveContains(search) ||
-            $0.folderName.localizedCaseInsensitiveContains(search) ||
-            ($0.googleEmail?.localizedCaseInsensitiveContains(search) ?? false)
+            $0.folderName.localizedCaseInsensitiveContains(search))
         }
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    customTopHeader
-
-                    TrackerSectionLabel(
-                        title: "Tracked Accounts",
-                        trailing: "\(filteredAccounts.count) accounts"
-                    )
-
-                    if filteredAccounts.isEmpty {
-                        ContentUnavailableView(
-                            accounts.isEmpty ? "No accounts configured" : "No matching accounts",
-                            systemImage: "person.2.slash",
-                            description: Text(
-                                accounts.isEmpty
-                                    ? "Add a Drive folder and associate it with an account in Settings."
-                                    : "Change the account search."
-                            )
-                        )
-                        .foregroundStyle(TrackerPalette.muted)
-                        .padding(.top, 44)
-                    } else {
-                        ForEach(filteredAccounts) { account in
-                            NavigationLink {
-                                AccountLibraryView(account: account)
-                            } label: {
-                                LibraryAccountRow(account: account)
+            List {
+                ForEach(filteredAccounts) { account in
+                    NavigationLink {
+                        AccountLibraryView(account: account)
+                    } label: {
+                        HStack(spacing: 12) {
+                            AccountIdentityIcon(symbol: account.iconSymbol, colorHex: account.iconColorHex, size: 36)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(account.displayName).font(.headline)
+                                Text(account.folderName).font(.subheadline).foregroundStyle(.secondary)
                             }
-                            .buttonStyle(TrackerPressButtonStyle())
-                        }
+                        }.padding(.vertical, 6)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 96)
-            }
-            .trackerScreen()
-            .toolbar(.hidden, for: .navigationBar)
-        }
-    }
-
-    private var customTopHeader: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("LIBRARY")
-                    .font(.system(size: 24, weight: .black, design: .rounded))
-                    .foregroundStyle(TrackerPalette.textPrimary)
-
-                Text("Video Vault & Inventory")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
-    }
-}
-
-private struct LibraryAccountRow: View {
-    let account: TikTokAccount
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 14) {
-                AccountIdentityIcon(
-                    symbol: account.iconSymbol,
-                    colorHex: account.iconColorHex,
-                    size: 52
-                )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(account.displayName)
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(TrackerPalette.textPrimary)
-                    Label(account.folderName, systemImage: "folder")
-                        .font(.caption)
-                        .foregroundStyle(TrackerPalette.muted)
-                        .lineLimit(1)
+                if filteredAccounts.isEmpty {
+                    ContentUnavailableView("No matching accounts", systemImage: "folder",
+                        description: Text("Add an account in Settings or change your search."))
                 }
-
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(TrackerPalette.muted)
             }
-
-            Divider().overlay(TrackerPalette.line)
-
-            HStack {
-                TrackerMetric(value: "\(account.videos.count)", label: "Total")
-                Spacer()
-                TrackerMetric(
-                    value: "\(account.availableCount)",
-                    label: "Unused",
-                    tint: TrackerPalette.accent
-                )
-                Spacer()
-                TrackerMetric(
-                    value: "\(account.uploadedCount)",
-                    label: "Completed",
-                    tint: TrackerPalette.success
-                )
-            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(TrackerPalette.canvas)
+            .navigationTitle("Library")
+            .searchable(text: $search, prompt: "Search accounts")
         }
-        .trackerCard(padding: 16)
     }
 }
 
@@ -138,6 +55,7 @@ enum MediaTypeFilter: String, CaseIterable, Identifiable {
 }
 
 private struct AccountLibraryView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let account: TikTokAccount
@@ -146,12 +64,23 @@ private struct AccountLibraryView: View {
     @State private var selectedStatus: VideoStatus?
     @State private var missingOnly = false
     @State private var previewVideo: VideoAsset?
-    @State private var isGridView = true
+    @State private var isGridView = false
+
+    @Query private var media: [VideoAsset]
+
+    init(account: TikTokAccount) {
+        self.account = account
+        let userID = account.googleUserID, folderID = account.driveFolderID
+        _media = Query(filter: #Predicate<VideoAsset> {
+            $0.googleUserID == userID && $0.accountFolderID == folderID
+        })
+    }
 
     private var filteredVideos: [VideoAsset] {
         let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
         let isSearching = !trimmed.isEmpty
-        return account.videos.filter { video in
+        return media.filter { video in
+            guard video.modelContext != nil, !video.isDeleted else { return false }
             switch mediaFilter {
             case .all: break
             case .videos: guard video.isVideo else { return false }
@@ -169,15 +98,13 @@ private struct AccountLibraryView: View {
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2)
+    }
 
     var body: some View {
         let videos = filteredVideos
-        ScrollView {
-            LazyVStack(spacing: 16) {
+        List {
                 accountHeroCard
 
                 filterBar
@@ -208,24 +135,21 @@ private struct AccountLibraryView: View {
                 } else if isGridView {
                     LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(videos) { video in
-                            LibraryVideoPosterCard(video: video) {
+                            LibraryVideoPosterCard(video: video, downloads: state.downloads) {
                                 previewVideo = video
                             }
                         }
                     }
                 } else {
-                    LazyVStack(spacing: 12) {
-                        ForEach(videos) { video in
-                            LibraryVideoListCard(video: video) {
+                    ForEach(videos) { video in
+                            LibraryVideoListCard(video: video, downloads: state.downloads) {
                                 previewVideo = video
                             }
-                        }
                     }
                 }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 28)
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .trackerScreen()
         .navigationTitle(account.displayName)
         .navigationBarTitleDisplayMode(.inline)
@@ -237,7 +161,7 @@ private struct AccountLibraryView: View {
                 Button {
                     Task { await state.sync(context: context, announce: false) }
                 } label: {
-                    if state.isWorking {
+                    if state.isWorking || state.isSyncing {
                         ProgressView()
                             .tint(TrackerPalette.accent)
                             .scaleEffect(0.7)
@@ -378,6 +302,7 @@ private struct LibraryVideoPosterCard: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
+    @ObservedObject var downloads: DownloadCoordinator
     let preview: () -> Void
 
     private var isDownloading: Bool {
@@ -430,7 +355,7 @@ private struct LibraryVideoPosterCard: View {
 
                     if !video.folderPath.isEmpty {
                         Text(video.folderPath)
-                            .font(.system(size: 10))
+                            .font(.caption)
                             .foregroundStyle(TrackerPalette.muted)
                             .lineLimit(1)
                     }
@@ -465,7 +390,7 @@ private struct LibraryVideoPosterCard: View {
                             }
                         }
                         .font(.caption2.weight(.bold))
-                        .foregroundStyle(isSaving ? TrackerPalette.accent : (isDownloading ? TrackerPalette.warning : Color(hex: "#090A0F")))
+                        .foregroundStyle(isSaving ? TrackerPalette.accent : (isDownloading ? TrackerPalette.warning : Color.white))
                         .frame(maxWidth: .infinity)
                         .frame(height: 32)
                         .background(isSaving ? TrackerPalette.raised : (isDownloading ? TrackerPalette.surface : TrackerPalette.accent))
@@ -537,6 +462,7 @@ private struct LibraryVideoListCard: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let video: VideoAsset
+    @ObservedObject var downloads: DownloadCoordinator
     let preview: () -> Void
     @State private var confirmRedownload = false
 
@@ -617,7 +543,7 @@ private struct LibraryVideoListCard: View {
                 .padding(.bottom, 8)
             } else if isDownloading {
                 VStack(spacing: 6) {
-                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                    if let progress = downloads.progressByIdentity[video.identityKey] {
                         let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
                         let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
                         Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
@@ -627,7 +553,7 @@ private struct LibraryVideoListCard: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
 
-                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
+                    if let progress = downloads.progressByIdentity[video.identityKey] {
                         ProgressView(value: progress.fraction)
                             .tint(TrackerPalette.accent)
                     } else {
@@ -1175,6 +1101,10 @@ struct VideoPreviewView: View {
     @State private var temporaryPreviewURL: URL?
     @State private var isUsingLocalPreview = false
     @State private var isFallingBack = false
+    @State private var isVisible = false
+    @State private var fallbackTask: Task<Void, Never>?
+    @State private var durationTask: Task<Void, Never>?
+    @State private var statusObservation: NSKeyValueObservation?
 
     private let speeds: [Float] = [1.0, 1.25, 1.5, 2.0]
 
@@ -1430,7 +1360,7 @@ struct VideoPreviewView: View {
                                         Text("Copy to Clipboard")
                                     }
                                     .font(.caption2.weight(.bold))
-                                    .foregroundStyle(Color(hex: "#090A0F"))
+                                    .foregroundStyle(Color.white)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 5)
                                     .background(TrackerPalette.accent, in: Capsule())
@@ -1543,10 +1473,11 @@ struct VideoPreviewView: View {
     }
 
     private func loadPreview() async {
+        isVisible = true
         isLoading = true
         loadError = nil
         if video.isPhoto {
-            if let cached = ThumbnailService.shared.cachedImage(for: video.identityKey) {
+            if let cached = ThumbnailService.shared.cachedImage(for: ThumbnailService.cacheKey(for: video)) {
                 photoImage = cached
                 isLoading = false
             }
@@ -1555,6 +1486,7 @@ struct VideoPreviewView: View {
                 api: state.api,
                 currentUserID: state.auth.userID
             ) {
+                guard isVisible, !Task.isCancelled else { return }
                 photoImage = loaded
                 isLoading = false
             } else if photoImage == nil {
@@ -1567,25 +1499,30 @@ struct VideoPreviewView: View {
         do {
             try configureAudioSession()
             let item = try await state.previewPlayerItem(video)
+            try Task.checkCancellation()
+            guard isVisible else { return }
             installPlayer(item)
             isLoading = false
             
             // Asynchronously resolve duration off the critical playback start path
-            Task(priority: .utility) {
+            durationTask = Task(priority: .utility) {
                 if let loadedDuration = try? await item.asset.load(.duration),
                    loadedDuration.isNumeric,
-                   loadedDuration.seconds > 0 {
-                    await MainActor.run {
-                        self.duration = loadedDuration.seconds
-                    }
+                   loadedDuration.seconds.isFinite,
+                   loadedDuration.seconds > 0,
+                   !Task.isCancelled, isVisible {
+                    self.duration = loadedDuration.seconds
                 }
             }
         } catch {
+            guard isVisible, !Task.isCancelled else { return }
             await loadLocalFallback(streamError: error)
         }
     }
 
     private func validate(_ item: AVPlayerItem) async throws {
+        guard try await item.asset.load(.isPlayable) else { throw VideoPreviewError.notPlayable }
+        try Task.checkCancellation()
         if let loadedDuration = try? await item.asset.load(.duration),
            loadedDuration.isNumeric,
            loadedDuration.seconds > 0 {
@@ -1594,6 +1531,9 @@ struct VideoPreviewView: View {
     }
 
     private func installPlayer(_ item: AVPlayerItem) {
+        guard isVisible else { return }
+        statusObservation?.invalidate()
+        player?.pause()
         if let token = timeObserverToken, let player {
             player.removeTimeObserver(token)
         }
@@ -1605,14 +1545,21 @@ struct VideoPreviewView: View {
         streamPlayer.isMuted = isMuted
         player = streamPlayer
 
-        let interval = CMTime(seconds: 0.15, preferredTimescale: 600)
+        statusObservation = PlaybackObservation.failure(of: item) {
+            guard isVisible, item === player?.currentItem else { return }
+            beginLocalFallback()
+        }
+
+        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         timeObserverToken = streamPlayer.addPeriodicTimeObserver(
             forInterval: interval,
             queue: .main
         ) { [weak streamPlayer] time in
             Task { @MainActor in
-                guard !isEditingSlider else { return }
-                currentTime = time.seconds
+                guard isVisible, streamPlayer === player, !isEditingSlider else { return }
+                if time.seconds.isFinite {
+                    currentTime = max(0, min(time.seconds, duration > 0 ? duration : time.seconds))
+                }
                 if let itemDuration = streamPlayer?.currentItem?.duration.seconds,
                    itemDuration.isFinite,
                    itemDuration > 0 {
@@ -1622,11 +1569,13 @@ struct VideoPreviewView: View {
             }
         }
 
+        if currentTime > 0 { seek(to: currentTime) }
         streamPlayer.playImmediately(atRate: playbackRate)
         isPlaying = true
     }
 
     private func beginLocalFallback() {
+        guard isVisible else { return }
         guard !isUsingLocalPreview, !isFallingBack else {
             if isUsingLocalPreview {
                 loadError = player?.currentItem?.error?.localizedDescription
@@ -1634,21 +1583,30 @@ struct VideoPreviewView: View {
             }
             return
         }
-        Task { await loadLocalFallback(streamError: player?.currentItem?.error) }
+        guard fallbackTask == nil else { return }
+        fallbackTask = Task {
+            await loadLocalFallback(streamError: player?.currentItem?.error)
+            fallbackTask = nil
+        }
     }
 
     private func loadLocalFallback(streamError: Error?) async {
-        guard !isFallingBack else { return }
+        guard isVisible, !Task.isCancelled, !isFallingBack else { return }
         isFallingBack = true
         isLoading = true
         loadError = nil
         player?.pause()
         do {
             let localURL = try await state.previewFile(video)
+            guard isVisible, !Task.isCancelled else {
+                try? FileManager.default.removeItem(at: localURL)
+                return
+            }
             temporaryPreviewURL = localURL
             isUsingLocalPreview = true
             let item = AVPlayerItem(url: localURL)
             try await validate(item)
+            guard isVisible, !Task.isCancelled else { return }
             installPlayer(item)
         } catch {
             loadError = error.localizedDescription.isEmpty
@@ -1699,7 +1657,7 @@ struct VideoPreviewView: View {
     }
 
     private func seek(to seconds: Double) {
-        guard let player else { return }
+        guard let player, seconds.isFinite, seconds >= 0 else { return }
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         let tolerance = CMTime(seconds: 0.15, preferredTimescale: 600)
         player.seek(to: time, toleranceBefore: tolerance, toleranceAfter: tolerance)
@@ -1713,11 +1671,20 @@ struct VideoPreviewView: View {
     }
 
     private func cleanupPlayer() {
+        isVisible = false
+        fallbackTask?.cancel()
+        fallbackTask = nil
+        durationTask?.cancel()
+        durationTask = nil
+        statusObservation?.invalidate()
+        statusObservation = nil
         if let token = timeObserverToken, let player {
             player.removeTimeObserver(token)
         }
         timeObserverToken = nil
         player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
         if let temporaryPreviewURL {
             try? FileManager.default.removeItem(at: temporaryPreviewURL)
             self.temporaryPreviewURL = nil
@@ -1729,11 +1696,7 @@ struct VideoPreviewView: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        guard !seconds.isNaN && seconds >= 0 else { return "00:00" }
-        let totalSeconds = Int(seconds)
-        let mins = totalSeconds / 60
-        let secs = totalSeconds % 60
-        return String(format: "%02d:%02d", mins, secs)
+        PlaybackTime.format(seconds)
     }
 }
 

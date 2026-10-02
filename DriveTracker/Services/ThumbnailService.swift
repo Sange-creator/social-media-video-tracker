@@ -4,27 +4,43 @@ import ImageIO
 import UIKit
 
 @MainActor
+protocol DriveThumbnailAPI {
+    func thumbnailData(for item: VideoAsset) async throws -> Data
+}
+
+extension DriveAPIClient: DriveThumbnailAPI {}
+
+@MainActor
 final class ThumbnailService {
     static let shared = ThumbnailService()
 
     private let memoryCache = NSCache<NSString, UIImage>()
     private let diskCacheDirectory: URL
-    private var inFlightTasks: [String: Task<UIImage?, Never>] = [:]
+    private struct Request {
+        let id: UUID
+        let task: Task<UIImage?, Never>
+        var consumers: Set<UUID>
+    }
+    private var inFlightTasks: [String: Request] = [:]
 
     // Concurrency control: Limit concurrent thumbnail network/decode operations to 4
     private let maxConcurrentFetches = 4
     private var activeFetchCount = 0
-    private var fetchWaiters: [(id: UUID, continuation: CheckedContinuation<Void, Never>)] = []
+    private var fetchWaiters: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
 
-    private init() {
-        memoryCache.countLimit = 400
-        memoryCache.totalCostLimit = 128 * 1_024 * 1_024 // 128 MB in-memory limit
+    init(cacheDirectory: URL? = nil) {
+        memoryCache.countLimit = 150
+        memoryCache.totalCostLimit = 32 * 1_024 * 1_024 // Leave room for AVPlayer buffers.
 
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let directory = caches.appendingPathComponent("DriveTrackerThumbnails", isDirectory: true)
+        let directory = cacheDirectory ?? caches.appendingPathComponent("DriveTrackerThumbnails", isDirectory: true)
         self.diskCacheDirectory = directory
 
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    static func cacheKey(for video: VideoAsset) -> String {
+        "\(video.identityKey)|\(video.driveModifiedAt?.timeIntervalSince1970 ?? 0)"
     }
 
     private func diskFileURL(for identityKey: String) -> URL {
@@ -34,7 +50,7 @@ final class ThumbnailService {
         return diskCacheDirectory.appendingPathComponent("\(hash).jpg")
     }
 
-    /// Instant synchronous O(1) in-memory cache lookup. Guaranteed 0 disk I/O for 60/120fps scrolling.
+    /// In-memory lookup; callers do not read thumbnail files during layout.
     func memoryCachedImage(for identityKey: String) -> UIImage? {
         let key = identityKey as NSString
         return memoryCache.object(forKey: key)
@@ -49,10 +65,10 @@ final class ThumbnailService {
     /// in-flight deduplication, and background image decompression off the main thread.
     func thumbnailImage(
         for video: VideoAsset,
-        api: DriveAPIClient?,
+        api: (any DriveThumbnailAPI)?,
         currentUserID: String?
     ) async -> UIImage? {
-        let identity = video.identityKey
+        let identity = Self.cacheKey(for: video)
         let cacheKey = identity as NSString
 
         // 1. Check in-memory cache (instant synchronous lookup, guaranteed 0 disk I/O)
@@ -60,9 +76,12 @@ final class ThumbnailService {
             return cached
         }
 
-        // 2. Deduplicate in-flight loading tasks for this identity
-        if let existingTask = inFlightTasks[identity] {
-            return await existingTask.value
+        guard !Task.isCancelled else { return nil }
+        let consumerID = UUID()
+        if var existing = inFlightTasks[identity], !existing.task.isCancelled {
+            existing.consumers.insert(consumerID)
+            inFlightTasks[identity] = existing
+            return await consume(existing, identity: identity, consumerID: consumerID)
         }
 
         let fileURL = diskFileURL(for: identity)
@@ -72,6 +91,10 @@ final class ThumbnailService {
         let task = Task<UIImage?, Never> { [weak self] in
             guard let self else { return nil }
 
+            guard await self.acquireFetchSlot() else { return nil }
+            defer { self.releaseFetchSlot() }
+
+            // Bound disk reads and decodes as well as network requests.
             // A. Check on-disk persistent cache asynchronously off the main thread
             let diskCached = await Task.detached(priority: .utility) { () -> (UIImage, Int)? in
                 guard FileManager.default.fileExists(atPath: fileURL.path),
@@ -83,6 +106,7 @@ final class ThumbnailService {
                           [
                               kCGImageSourceCreateThumbnailFromImageAlways: true,
                               kCGImageSourceCreateThumbnailWithTransform: true,
+                              kCGImageSourceShouldCacheImmediately: true,
                               kCGImageSourceThumbnailMaxPixelSize: 320
                           ] as CFDictionary
                       )
@@ -92,6 +116,7 @@ final class ThumbnailService {
                 return (image, cost)
             }.value
 
+            guard !Task.isCancelled else { return nil }
             if let (image, cost) = diskCached {
                 self.memoryCache.setObject(image, forKey: cacheKey, cost: cost)
                 return image
@@ -102,11 +127,6 @@ final class ThumbnailService {
             }
 
             // B. Fetch from Google Drive with concurrency gate & background decoding
-            await self.acquireFetchSlot()
-            defer {
-                self.releaseFetchSlot()
-            }
-
             guard !Task.isCancelled,
                   let data = try? await api.thumbnailData(for: video)
             else {
@@ -122,13 +142,11 @@ final class ThumbnailService {
                           [
                               kCGImageSourceCreateThumbnailFromImageAlways: true,
                               kCGImageSourceCreateThumbnailWithTransform: true,
+                              kCGImageSourceShouldCacheImmediately: true,
                               kCGImageSourceThumbnailMaxPixelSize: 320
                           ] as CFDictionary
                       )
                 else {
-                    if let direct = UIImage(data: data) {
-                        return (direct, data)
-                    }
                     return nil
                 }
                 let uiImage = UIImage(cgImage: cgImage)
@@ -136,7 +154,7 @@ final class ThumbnailService {
                 return (uiImage, jpegData)
             }.value
 
-            guard let (decodedImage, jpegData) = decodedResult else { return nil }
+            guard !Task.isCancelled, let (decodedImage, jpegData) = decodedResult else { return nil }
 
             // Write to disk cache asynchronously
             Task.detached(priority: .background) {
@@ -151,20 +169,43 @@ final class ThumbnailService {
             return decodedImage
         }
 
-        inFlightTasks[identity] = task
-        defer { inFlightTasks.removeValue(forKey: identity) }
-        let image = await task.value
-        return image
+        let request = Request(id: UUID(), task: task, consumers: [consumerID])
+        inFlightTasks[identity] = request
+        return await consume(request, identity: identity, consumerID: consumerID)
+    }
+
+    private func consume(_ request: Request, identity: String, consumerID: UUID) async -> UIImage? {
+        defer { releaseConsumer(identity: identity, requestID: request.id, consumerID: consumerID) }
+        return await withTaskCancellationHandler {
+            let image = await request.task.value
+            return Task.isCancelled ? nil : image
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.releaseConsumer(identity: identity, requestID: request.id, consumerID: consumerID)
+            }
+        }
+    }
+
+    private func releaseConsumer(identity: String, requestID: UUID, consumerID: UUID) {
+        guard var request = inFlightTasks[identity], request.id == requestID,
+              request.consumers.remove(consumerID) != nil else { return }
+        if request.consumers.isEmpty {
+            request.task.cancel()
+            inFlightTasks.removeValue(forKey: identity)
+        } else {
+            inFlightTasks[identity] = request
+        }
     }
 
     /// Concurrency slot management
-    private func acquireFetchSlot() async {
+    private func acquireFetchSlot() async -> Bool {
+        guard !Task.isCancelled else { return false }
         if activeFetchCount < maxConcurrentFetches {
             activeFetchCount += 1
-            return
+            return true
         }
         let waiterID = UUID()
-        await withTaskCancellationHandler {
+        return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 fetchWaiters.append((id: waiterID, continuation: continuation))
             }
@@ -178,14 +219,14 @@ final class ThumbnailService {
     private func cancelWaiter(id: UUID) {
         if let index = fetchWaiters.firstIndex(where: { $0.id == id }) {
             let waiter = fetchWaiters.remove(at: index)
-            waiter.continuation.resume()
+            waiter.continuation.resume(returning: false)
         }
     }
 
     private func releaseFetchSlot() {
         if !fetchWaiters.isEmpty {
             let next = fetchWaiters.removeFirst()
-            next.continuation.resume()
+            next.continuation.resume(returning: true)
         } else {
             activeFetchCount = max(0, activeFetchCount - 1)
         }
@@ -194,14 +235,14 @@ final class ThumbnailService {
     /// Prefetches thumbnails for upcoming videos in the background
     func prefetchThumbnails(
         for videos: [VideoAsset],
-        api: DriveAPIClient?,
+        api: (any DriveThumbnailAPI)?,
         currentUserID: String?
     ) {
         guard let api, let currentUserID else { return }
         let eligible = videos.filter {
             $0.googleUserID == currentUserID &&
             !$0.isMissingFromDrive &&
-            memoryCachedImage(for: $0.identityKey) == nil
+            memoryCachedImage(for: Self.cacheKey(for: $0)) == nil
         }
         guard !eligible.isEmpty else { return }
 
@@ -216,6 +257,7 @@ final class ThumbnailService {
 
     func clearCache() {
         memoryCache.removeAllObjects()
+        for request in inFlightTasks.values { request.task.cancel() }
         inFlightTasks.removeAll()
         try? FileManager.default.removeItem(at: diskCacheDirectory)
         try? FileManager.default.createDirectory(at: diskCacheDirectory, withIntermediateDirectories: true)

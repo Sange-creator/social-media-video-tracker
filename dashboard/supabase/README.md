@@ -7,3 +7,5 @@
 5. Add the owner to `workspaces` and `workspace_members`; invitations should create memberships only after the invited email signs in.
 
 The database stores metadata and upload text only. Original media remains in Google Drive.
+
+Apply `migrations/002_sync_reliability.sql` after the initial schema before deploying the updated sync API. It adds assignment change timestamps and the missing member access policies.

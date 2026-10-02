@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-enum TrackerPalette {
+nonisolated enum TrackerPalette {
     static let canvas = adaptive(light: 0xF6F7F9, dark: 0x101319)
     static let surface = adaptive(light: 0xFFFFFF, dark: 0x181C24)
     static let raised = adaptive(light: 0xF0F2F5, dark: 0x222833)
@@ -16,7 +16,11 @@ enum TrackerPalette {
     static let danger = adaptive(light: 0xC52828, dark: 0xFB7185)
 
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
-        Color(uiColor: UIColor { traits in
+        Color(uiColor: adaptiveUIColor(light: light, dark: dark))
+    }
+
+    static func adaptiveUIColor(light: UInt32, dark: UInt32) -> UIColor {
+        UIColor { traits in
             let value = traits.userInterfaceStyle == .dark ? dark : light
             return UIColor(
                 red: CGFloat((value >> 16) & 0xFF) / 255,
@@ -24,7 +28,7 @@ enum TrackerPalette {
                 blue: CGFloat(value & 0xFF) / 255,
                 alpha: 1
             )
-        })
+        }
     }
 }
 
@@ -82,13 +86,13 @@ struct StatusPill: View {
                 .fill(tint)
                 .frame(width: 4.5, height: 4.5)
             Text(status.title.capitalized)
-                .font(.system(size: 9, weight: .bold))
+                .font(.caption2.weight(.semibold))
                 .lineLimit(1)
-                .minimumScaleFactor(0.75)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .foregroundStyle(tint)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 2.5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(tint.opacity(0.14), in: Capsule())
         .overlay {
             Capsule().stroke(tint.opacity(0.25), lineWidth: 0.5)
@@ -107,7 +111,7 @@ struct FilterChip: View {
                 .font(.system(size: 8, weight: .bold))
         }
         .font(.subheadline.weight(.medium))
-        .foregroundStyle(selected ? Color(hex: "#090A0F") : TrackerPalette.textPrimary)
+        .foregroundStyle(selected ? Color.white : TrackerPalette.textPrimary)
         .padding(.horizontal, 13)
         .frame(height: 34)
         .background(selected ? TrackerPalette.accent : TrackerPalette.surface, in: Capsule())
@@ -123,9 +127,8 @@ struct TrackerSectionLabel: View {
 
     var body: some View {
         HStack {
-            Text(title.uppercased())
+            Text(title)
                 .font(.caption.weight(.bold))
-                .tracking(0.6)
                 .foregroundStyle(TrackerPalette.muted)
             Spacer()
             if let trailing {
@@ -171,11 +174,11 @@ struct TrackerActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(compact ? .caption.weight(.bold) : .subheadline.weight(.semibold))
+            .font(compact ? .subheadline.weight(.medium) : .body.weight(.medium))
             .foregroundStyle(foreground)
             .padding(.horizontal, compact ? 10 : 14)
             .frame(maxWidth: (fullWidth ?? !compact) ? .infinity : nil, alignment: .center)
-            .frame(minHeight: compact ? 34 : 44)
+            .frame(minHeight: 44)
             .background(background.opacity(configuration.isPressed ? 0.82 : 1))
             .overlay {
                 RoundedRectangle(cornerRadius: compact ? 8 : 12, style: .continuous)
@@ -184,17 +187,12 @@ struct TrackerActionButtonStyle: ButtonStyle {
             .clipShape(RoundedRectangle(cornerRadius: compact ? 8 : 12, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            .sensoryFeedback(
-                .impact(flexibility: .soft, intensity: 0.65),
-                trigger: configuration.isPressed
-            ) { oldValue, newValue in
-                !oldValue && newValue
-            }
+
     }
 
     private var foreground: Color {
         switch kind {
-        case .primary: Color(hex: "#090A0F")
+        case .primary: Color.white
         case .secondary: TrackerPalette.textPrimary
         case .quiet: TrackerPalette.muted
         case .danger: TrackerPalette.danger
@@ -318,30 +316,14 @@ struct VideoThumbnailView: View {
         self.width = width
         self.height = height
         self.cornerRadius = cornerRadius
-        _image = State(initialValue: ThumbnailService.shared.memoryCachedImage(for: video.identityKey))
+        _image = State(initialValue: ThumbnailService.shared.memoryCachedImage(for: ThumbnailService.cacheKey(for: video)))
     }
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(TrackerPalette.raised)
-
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .transition(.opacity)
-            } else {
-                Image(systemName: video.isPhoto ? "photo" : "film")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            Color.black.opacity(image == nil ? 0 : 0.18)
-        }
-        .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .task(id: video.identityKey) {
+        ThumbnailArtwork(image: image, isPhoto: video.isPhoto, cornerRadius: cornerRadius)
+            .frame(width: width, height: height)
+        .task(id: ThumbnailService.cacheKey(for: video)) {
+            image = ThumbnailService.shared.memoryCachedImage(for: ThumbnailService.cacheKey(for: video))
             if image == nil {
                 // Scroll-aware gate: cancel immediately during fast flings to keep 60fps scrolling
                 try? await Task.sleep(for: .milliseconds(50))
@@ -356,6 +338,37 @@ struct VideoThumbnailView: View {
                 }
             }
         }
+    }
+}
+
+// Image pixels are an overlay, so their aspect ratio cannot change the width
+// proposed by a grid or row. Clipping alone does not constrain intrinsic size.
+struct ThumbnailArtwork: View {
+    let image: UIImage?
+    var isPhoto = false
+    var cornerRadius: CGFloat = 12
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(TrackerPalette.raised)
+            .overlay {
+                GeometryReader { geometry in
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                            .overlay(Color.black.opacity(0.18))
+                    } else {
+                        Image(systemName: isPhoto ? "photo" : "film")
+                            .font(.title3.weight(.medium))
+                            .foregroundStyle(TrackerPalette.muted)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 

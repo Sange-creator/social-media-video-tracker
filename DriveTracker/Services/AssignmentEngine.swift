@@ -20,12 +20,19 @@ struct AssignmentEngine {
             return AssignmentSummary(added: 0, outstanding: account.outstandingCount, shortage: 0)
         }
 
+        // A removed file cannot occupy an unfinished suggestion indefinitely.
+        // Downloaded copies and immutable history remain available.
+        for assignment in account.assignments where assignment.isActive &&
+            assignment.video?.isMissingFromDrive == true && assignment.video?.status == .assigned {
+            assignment.isActive = false
+            assignment.updatedAt = date
+        }
         let dayKey = DayKey.value(for: date)
         var outstanding = account.videos.filter {
-            $0.status == .assigned || $0.status == .downloaded
+            $0.isVideo && ($0.status == .assigned || $0.status == .downloaded)
         }
         let completedToday = account.videos.filter {
-            guard let uploadedAt = $0.uploadedAt else { return false }
+            guard $0.isVideo, let uploadedAt = $0.uploadedAt else { return false }
             return DayKey.value(for: uploadedAt) == dayKey
         }.count
         let targetOutstanding = max(0, account.dailyQuota - completedToday)
@@ -51,7 +58,7 @@ struct AssignmentEngine {
                 excess -= 1
             }
             outstanding = account.videos.filter {
-                $0.status == .assigned || $0.status == .downloaded
+                $0.isVideo && ($0.status == .assigned || $0.status == .downloaded)
             }
         }
         let needed = max(0, account.dailyQuota - outstanding.count - completedToday)
@@ -92,8 +99,10 @@ struct AssignmentEngine {
             nextSlot += 1
         }
 
-        account.updatedAt = .now
-        try context.save()
+        if context.hasChanges {
+            account.updatedAt = date
+            try context.save()
+        }
         return AssignmentSummary(
             added: selected.count,
             outstanding: outstanding.count + selected.count,

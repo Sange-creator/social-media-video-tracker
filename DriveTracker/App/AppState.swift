@@ -15,6 +15,7 @@ struct DriveFolderChoice: Identifiable, Hashable {
 @MainActor
 final class AppState: ObservableObject {
     @Published var isWorking = false
+    @Published private(set) var isSyncing = false
     @Published var statusMessage: String?
     @Published var errorMessage: String?
     @Published var toastMessage: String?
@@ -69,8 +70,9 @@ final class AppState: ObservableObject {
     private var startupMaintenanceTask: Task<Void, Never>?
     private var changesMonitoringTask: Task<Void, Never>?
     private var isCheckingForChanges = false
-    private var driveSyncRequestedWhileWorking = false
-    private var queuedDriveSyncContext: ModelContext?
+    private var driveSyncTask: Task<Bool, Never>?
+    private var driveSyncRequestedWhileRunning = false
+    private let driveChangeTracker: DriveChangeTracker
     private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
     private var copyQueueSyncTaskKey: String?
     private var copyQueueSyncTaskToken: UUID?
@@ -80,6 +82,7 @@ final class AppState: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.driveChangeTracker = DriveChangeTracker(defaults: defaults)
         let auth = GoogleAuthService()
         let api = DriveAPIClient(auth: auth)
         self.auth = auth
@@ -325,23 +328,31 @@ final class AppState: ObservableObject {
     /// local workflow state (assignments, downloads, and completion history)
     /// is preserved. A sync writes only when the reconciliation changed data,
     /// which keeps SwiftData-backed screens from needlessly reloading.
-    func sync(context: ModelContext, announce: Bool = false) async {
-        guard !isWorking else {
-            driveSyncRequestedWhileWorking = true
-            queuedDriveSyncContext = context
-            // Await the active and queued sync so the user's manual reload never
-            // drops or exits prematurely before fresh data is persisted.
-            while isWorking || driveSyncRequestedWhileWorking {
-                try? await Task.sleep(for: .milliseconds(120))
-                guard !Task.isCancelled else { return }
+    @discardableResult
+    func sync(context: ModelContext, announce: Bool = false) async -> Bool {
+        if let task = driveSyncTask {
+            driveSyncRequestedWhileRunning = true
+            return await task.value
+        }
+        let task = Task { @MainActor in
+            self.isSyncing = true
+            defer {
+                self.isSyncing = false
+                self.driveSyncTask = nil
             }
-            return
+            var succeeded = false
+            repeat {
+                self.driveSyncRequestedWhileRunning = false
+                succeeded = await self.reconcileDrive(context: context, announce: announce)
+            } while self.driveSyncRequestedWhileRunning && !Task.isCancelled
+            return succeeded
         }
-        isWorking = true
+        driveSyncTask = task
+        return await task.value
+    }
+
+    private func reconcileDrive(context: ModelContext, announce: Bool) async -> Bool {
         if announce { errorMessage = nil }
-        defer {
-            finishWorkingAndRunQueuedSync(fallbackContext: context)
-        }
         do {
             guard let userID = auth.userID else { throw GoogleAuthError.notSignedIn }
             let sources = try context.fetch(FetchDescriptor<DriveSource>())
@@ -357,15 +368,10 @@ final class AppState: ObservableObject {
                 let linkedAccounts = accountsBySource[source.id] ?? []
                 for account in linkedAccounts {
                     try Task.checkCancellation()
-                    let reference = linkedAccounts.count == 1
-                        ? DriveFolderReference(
-                            folderID: source.rootFolderID,
-                            resourceKey: source.rootResourceKey
-                        )
-                        : DriveFolderReference(
-                            folderID: account.driveFolderID,
-                            resourceKey: account.folderResourceKey
-                        )
+                    let reference = DriveFolderReference(
+                        folderID: account.driveFolderID,
+                        resourceKey: account.folderResourceKey
+                    )
                     let result = try await syncSource(
                         source,
                         account: account,
@@ -378,20 +384,19 @@ final class AppState: ObservableObject {
             }
             setSyncDate()
             lastAutomaticSyncAttempt = .now
-            if let startToken = try? await api.startPageToken() {
-                defaults.set(startToken, forKey: changesTokenKey(for: userID))
-            }
             try ensureToday(context: context)
-            await syncWorkspaceMedia(context: context)
+            await syncWorkspaceMedia(context: context, fullRefresh: newVideoCount > 0)
             if announce {
                 statusMessage = "Folder check complete: \(videoCount) videos tracked; \(newVideoCount) new."
             }
             scheduleBackup(context: context)
+            return true
         } catch {
-            guard !isCancellation(error) else { return }
-            if announce {
-                errorMessage = error.localizedDescription
-            }
+            guard !isCancellation(error) else { return false }
+            // Automatic failures must be visible too; otherwise a stale library
+            // looks like a successful sync and leaves the user guessing.
+            errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -399,8 +404,7 @@ final class AppState: ObservableObject {
         "\(Keys.changesPageTokenPrefix)\(userID)"
     }
 
-    /// Fast, lightweight incremental check against Google Drive Changes API (~100ms).
-    /// Immediately triggers folder sync as soon as files are added, modified, or removed in Drive.
+    /// Poll Drive changes and reconcile when additions, edits, or removals are reported.
     func checkForDriveChanges(context: ModelContext) async {
         guard auth.isSignedIn, let userID = auth.userID, !isCheckingForChanges else { return }
         isCheckingForChanges = true
@@ -410,28 +414,13 @@ final class AppState: ObservableObject {
             .filter { $0.googleUserID == userID && $0.isEnabled } ?? []
         guard !sources.isEmpty else { return }
 
-        let tokenKey = changesTokenKey(for: userID)
-        guard let token = defaults.string(forKey: tokenKey), !token.isEmpty else {
-            // First time: fetch start token and run baseline sync
-            if let startToken = try? await api.startPageToken() {
-                defaults.set(startToken, forKey: tokenKey)
-            }
-            await sync(context: context, announce: false)
-            return
-        }
-
-        do {
-            let (changes, nextToken) = try await api.listChanges(pageToken: token)
-            guard !changes.isEmpty else { return }
-
-            await sync(context: context, announce: false)
-            defaults.set(nextToken, forKey: tokenKey)
-        } catch {
-            if let startToken = try? await api.startPageToken() {
-                defaults.set(startToken, forKey: tokenKey)
-            }
-            await sync(context: context, announce: false)
-        }
+        await driveChangeTracker.check(
+            key: changesTokenKey(for: userID),
+            startToken: { try await self.api.startPageToken() },
+            changes: { try await self.api.listChanges(pageToken: $0) },
+            reconcile: { await self.sync(context: context) },
+            isCurrentUser: { self.auth.userID == userID }
+        )
     }
 
     /// Foreground monitor for lightweight Drive change checks. A full
@@ -443,15 +432,16 @@ final class AppState: ObservableObject {
             var checkCount = 0
             while !Task.isCancelled {
                 guard !Task.isCancelled, let self else { return }
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { return }
                 checkCount += 1
                 await self.checkForDriveChanges(context: context)
                 // Repair missed notifications without constantly walking every
                 // nested folder. Normal changes trigger their own immediate sync.
-                if checkCount % 100 == 0 {
+                if checkCount % 60 == 0 {
                     await self.sync(context: context, announce: false)
                 }
+                await self.syncWorkspaceMedia(context: context)
+                do { try await Task.sleep(for: .seconds(5)) }
+                catch { return }
             }
         }
     }
@@ -459,6 +449,8 @@ final class AppState: ObservableObject {
     func stopDriveChangeMonitor() {
         changesMonitoringTask?.cancel()
         changesMonitoringTask = nil
+        startupMaintenanceTask?.cancel()
+        driveSyncTask?.cancel()
     }
 
     /// Performs an on-demand foreground refresh when requested.
@@ -507,6 +499,20 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func shuffleAllSuggestions(context: ModelContext) {
+        do {
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+                .filter { $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }
+            var changed = 0
+            for account in accounts {
+                changed += try assignmentEngine.shuffleSuggestions(for: account, context: context)
+            }
+            if changed == 0 { toastMessage = "No unused videos available for new suggestions" }
+            else { toastMessage = "\(changed) suggestions shuffled" }
+            scheduleBackup(context: context)
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func shuffleSuggestions(for account: TikTokAccount, context: ModelContext) {
@@ -849,6 +855,7 @@ final class AppState: ObservableObject {
             toastMessage = normalized.isEmpty ? "Upload text removed" : "Upload text saved"
             scheduleBackup(context: context)
             let localRevision = video.uploadTextRevision
+            let ownerID = video.googleUserID
             if let mediaID = video.workspaceMediaID {
                 video.uploadTextSyncState = .saving
                 Task {
@@ -859,7 +866,7 @@ final class AppState: ObservableObject {
                             revision: max(0, localRevision - 1),
                             auth: auth
                         )
-                        guard video.uploadTextRevision == localRevision else { return }
+                        guard video.modelContext != nil, video.uploadTextRevision == localRevision else { return }
                         video.uploadTextRevision = remote.revision
                         video.uploadTextSyncState = .synced
                         try? context.save()
@@ -875,7 +882,8 @@ final class AppState: ObservableObject {
                                     text: normalized,
                                     revision: max(0, localRevision - 1),
                                     completed: nil,
-                                    createdAt: .now
+                                    createdAt: .now,
+                                    googleUserID: ownerID
                                 )
                             )
                         }
@@ -902,13 +910,17 @@ final class AppState: ObservableObject {
 
     private func enqueueWorkspaceOutbox(_ item: WorkspaceOutboxItem) {
         var items = workspaceOutbox
+        guard !items.contains(where: {
+            $0.googleUserID == item.googleUserID && $0.kind == item.kind &&
+            $0.mediaID == item.mediaID && $0.text == item.text && $0.completed == item.completed
+        }) else { return }
         items.append(item)
         workspaceOutbox = items
     }
 
     private func drainWorkspaceOutbox() async {
-        guard await workspaceSync.isConfigured else { return }
-        let currentItems = workspaceOutbox
+        guard let userID = auth.userID, await workspaceSync.isConfigured else { return }
+        let currentItems = workspaceOutbox.filter { $0.canReplay(for: userID) }
         guard !currentItems.isEmpty else { return }
         let clearedIDs = await workspaceSync.drainOutbox(items: currentItems, auth: auth)
         if !clearedIDs.isEmpty {
@@ -917,26 +929,46 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func syncWorkspaceMedia(context: ModelContext) async {
-        guard await workspaceSync.isConfigured else { return }
+    private var isSyncingWorkspace = false
+    private var needsFullWorkspaceRefresh = false
+
+    private func syncWorkspaceMedia(context: ModelContext, fullRefresh: Bool = false) async {
+        needsFullWorkspaceRefresh = needsFullWorkspaceRefresh || fullRefresh
+        guard !isSyncingWorkspace, let userID = auth.userID,
+              await workspaceSync.isConfigured else { return }
+        let readFull = needsFullWorkspaceRefresh
+        needsFullWorkspaceRefresh = false
+        isSyncingWorkspace = true
+        defer { isSyncingWorkspace = false }
         do {
             await drainWorkspaceOutbox()
 
-            let cursor = defaults.string(forKey: Keys.workspaceDeltaCursor)
+            let cursorKey = "\(Keys.workspaceDeltaCursor).\(userID)"
+            let cursor = readFull ? nil : defaults.string(forKey: cursorKey)
             let delta = try await workspaceSync.syncDeltas(since: cursor, auth: auth)
-            defaults.set(delta.cursor, forKey: Keys.workspaceDeltaCursor)
+            guard auth.userID == userID, !Task.isCancelled else { return }
 
             let remoteByDriveID = Dictionary(delta.changes.map { ($0.driveFileId, $0) }, uniquingKeysWith: { first, _ in first })
             let videos = try context.fetch(FetchDescriptor<VideoAsset>())
             var changed = false
             for video in videos where video.googleUserID == auth.userID {
                 guard let remote = remoteByDriveID[video.driveFileID] else { continue }
-                video.workspaceMediaID = remote.id
-                if remote.revision >= video.uploadTextRevision {
-                    video.uploadText = remote.uploadText
-                    video.uploadTextRevision = remote.revision
-                    video.uploadTextSyncState = .synced
+                if video.workspaceMediaID != remote.id {
+                    video.workspaceMediaID = remote.id
                     changed = true
+                }
+                if remote.acknowledges(text: video.uploadText, revision: video.uploadTextRevision) {
+                    if video.uploadTextRevision != remote.revision || video.uploadTextSyncState != .synced {
+                        video.uploadTextRevision = remote.revision
+                        video.uploadTextSyncState = .synced
+                        changed = true
+                    }
+                } else if video.uploadTextSyncState == .synced, remote.revision >= video.uploadTextRevision {
+                    if video.uploadText != remote.uploadText || video.uploadTextRevision != remote.revision {
+                        video.uploadText = remote.uploadText
+                        video.uploadTextRevision = remote.revision
+                        changed = true
+                    }
                 } else if video.uploadTextSyncState == .offline {
                     enqueueWorkspaceOutbox(
                         WorkspaceOutboxItem(
@@ -946,7 +978,8 @@ final class AppState: ObservableObject {
                             text: video.uploadText,
                             revision: remote.revision,
                             completed: nil,
-                            createdAt: .now
+                            createdAt: .now,
+                            googleUserID: video.googleUserID
                         )
                     )
                 }
@@ -966,7 +999,9 @@ final class AppState: ObservableObject {
             }
 
             if changed { try context.save() }
+            defaults.set(delta.cursor, forKey: cursorKey)
         } catch {
+            needsFullWorkspaceRefresh = needsFullWorkspaceRefresh || readFull
             // Drive remains usable if the optional shared workspace is offline.
         }
     }
@@ -1181,6 +1216,7 @@ final class AppState: ObservableObject {
 
     private func syncAssignmentCompletion(for video: VideoAsset, completed: Bool) {
         guard let mediaID = video.workspaceMediaID else { return }
+        let ownerID = video.googleUserID
         Task {
             do {
                 try await workspaceSync.completeAssignment(mediaID: mediaID, completed: completed, auth: auth)
@@ -1193,7 +1229,8 @@ final class AppState: ObservableObject {
                         text: nil,
                         revision: nil,
                         completed: completed,
-                        createdAt: .now
+                        createdAt: .now,
+                        googleUserID: ownerID
                     )
                 )
             }
@@ -1344,8 +1381,7 @@ final class AppState: ObservableObject {
         guard !video.isMissingFromDrive else {
             throw DriveAssociationError.videoMissing
         }
-        let localURL = try await api.previewFile(for: video)
-        return AVPlayerItem(url: localURL)
+        return try await api.streamingPlayerItem(for: video)
     }
 
     func thumbnailImage(for video: VideoAsset) async -> UIImage? {
@@ -1357,7 +1393,7 @@ final class AppState: ObservableObject {
     }
 
     func cachedThumbnail(for video: VideoAsset) -> UIImage? {
-        ThumbnailService.shared.cachedImage(for: video.identityKey)
+        ThumbnailService.shared.cachedImage(for: ThumbnailService.cacheKey(for: video))
     }
 
     func backupNow(context: ModelContext) async {
@@ -1782,8 +1818,10 @@ final class AppState: ObservableObject {
             account: account,
             context: context
         )
-        source.lastSyncedAt = .now
-        try context.save()
+        if source.lastSyncedAt.map({ Date.now.timeIntervalSince($0) >= 300 }) ?? true {
+            source.lastSyncedAt = .now
+            try context.save()
+        }
         return result
     }
 
@@ -1855,7 +1893,11 @@ final class AppState: ObservableObject {
 
     private func scheduleStartupMaintenance(context: ModelContext) {
         startupMaintenanceTask?.cancel()
-        // No automatic Drive sync on startup to keep launch instant and lag-free.
+        startupMaintenanceTask = Task(priority: .utility) { [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            await self.sync(context: context)
+        }
     }
 
     private func verifyOriginalFile(video: VideoAsset, localURL: URL) async throws {
@@ -2028,24 +2070,12 @@ final class AppState: ObservableObject {
     private func perform(_ work: () async throws -> Void) async {
         isWorking = true
         errorMessage = nil
-        defer { finishWorkingAndRunQueuedSync() }
+        defer { isWorking = false }
         do {
             try await work()
         } catch {
             guard !isCancellation(error) else { return }
             errorMessage = error.localizedDescription
-        }
-    }
-
-    private func finishWorkingAndRunQueuedSync(fallbackContext: ModelContext? = nil) {
-        isWorking = false
-        guard driveSyncRequestedWhileWorking,
-              let context = queuedDriveSyncContext ?? fallbackContext
-        else { return }
-        driveSyncRequestedWhileWorking = false
-        queuedDriveSyncContext = nil
-        Task { [weak self] in
-            await self?.sync(context: context, announce: false)
         }
     }
 

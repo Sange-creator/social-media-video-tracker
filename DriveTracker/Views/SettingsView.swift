@@ -22,7 +22,6 @@ struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
-                    customTopHeader
                     googleSection
                     driveSection
                     legacyClipboardArchiveSection
@@ -30,13 +29,17 @@ struct SettingsView: View {
                     backupSection
                     privacySection
                     dangerSection
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(TrackerPalette.muted)
+                        .accessibilityIdentifier("app-build-version")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 96)
             }
             .trackerScreen()
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("Settings")
             .onAppear {
                 folderLink = state.rootLink
             }
@@ -120,42 +123,6 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
-    private var customTopHeader: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("SETTINGS")
-                    .font(.system(size: 24, weight: .black, design: .rounded))
-                    .foregroundStyle(TrackerPalette.textPrimary)
-
-                Text("Connected Accounts & Storage")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TrackerPalette.muted)
-            }
-
-            Spacer()
-
-            if auth.isSignedIn {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(TrackerPalette.success)
-                        .frame(width: 6, height: 6)
-                        .shadow(color: TrackerPalette.success.opacity(0.8), radius: 3)
-                    Text("ONLINE")
-                        .font(.system(size: 10, weight: .black))
-                        .foregroundStyle(TrackerPalette.success)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(TrackerPalette.success.opacity(0.12), in: Capsule())
-                .overlay {
-                    Capsule().stroke(TrackerPalette.success.opacity(0.3), lineWidth: 1)
-                }
-            }
-        }
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
-    }
-
     private var googleSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             TrackerSectionLabel(
@@ -232,7 +199,7 @@ struct SettingsView: View {
                         Text("Sign In with Google")
                     }
                     .font(.subheadline.weight(.bold))
-                    .foregroundStyle(Color(hex: "#090A0F"))
+                    .foregroundStyle(Color.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(TrackerPalette.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -270,7 +237,7 @@ struct SettingsView: View {
                         Text("Browse Drive")
                     }
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(Color(hex: "#090A0F"))
+                    .foregroundStyle(Color.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .background(TrackerPalette.accent, in: Capsule())
@@ -284,7 +251,7 @@ struct SettingsView: View {
                     Task { await state.sync(context: context) }
                 } label: {
                     HStack(spacing: 5) {
-                        if state.isWorking {
+                        if state.isWorking || state.isSyncing {
                             ProgressView()
                                 .tint(TrackerPalette.accent)
                                 .scaleEffect(0.7)
@@ -465,14 +432,14 @@ struct SettingsView: View {
                     HStack(spacing: 6) {
                         if state.isBackingUpVideos {
                             ProgressView()
-                                .tint(Color(hex: "#090A0F"))
+                                .tint(Color.white)
                         } else {
                             Image(systemName: "externaldrive.fill.badge.plus")
                         }
                         Text(state.isBackingUpVideos ? "Backing Up…" : "Back Up Videos")
                     }
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(Color(hex: "#090A0F"))
+                    .foregroundStyle(Color.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(TrackerPalette.accent, in: Capsule())

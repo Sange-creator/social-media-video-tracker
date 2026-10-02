@@ -63,192 +63,43 @@ export async function requireAuth(request: NextRequest): Promise<AuthContext> {
   throw new Response("Unauthorized", { status: 401 });
 }
 
-const fallbackMedia: Record<string, unknown>[] = [
-  {
-    id: "1",
-    drive_file_id: "demo-1",
-    name: "desk-setup-final.mp4",
-    mime_type: "video/mp4",
-    folder_path: "Creator Studio / September",
-    size_bytes: 88288768,
-    starred: true,
-    trashed: false,
-    can_download: true,
-    upload_text: "A cleaner desk makes room for better ideas. Here is the setup I use every day.\n\n#DeskSetup #CreatorTools #Productivity",
-    upload_text_revision: 3,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "2",
-    drive_file_id: "demo-2",
-    name: "camera-closeup.mov",
-    mime_type: "video/quicktime",
-    folder_path: "Creator Studio / Reviews",
-    size_bytes: 132120576,
-    starred: false,
-    trashed: false,
-    can_download: true,
-    upload_text: "",
-    upload_text_revision: 0,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "3",
-    drive_file_id: "demo-3",
-    name: "thumbnail-blue.jpg",
-    mime_type: "image/jpeg",
-    folder_path: "Creator Studio / Thumbnails",
-    size_bytes: 2936012,
-    starred: false,
-    trashed: false,
-    can_download: true,
-    upload_text: "Three camera settings that instantly make indoor video look better.\n\n#VideoTips #CameraSettings",
-    upload_text_revision: 1,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "4",
-    drive_file_id: "demo-4",
-    name: "morning-routine.mp4",
-    mime_type: "video/mp4",
-    folder_path: "Creator Studio / Lifestyle",
-    size_bytes: 95944704,
-    starred: true,
-    trashed: false,
-    can_download: true,
-    upload_text: "",
-    upload_text_revision: 0,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "5",
-    drive_file_id: "demo-5",
-    name: "editing-timeline.mp4",
-    mime_type: "video/mp4",
-    folder_path: "Creator Studio / Tutorials",
-    size_bytes: 148897792,
-    starred: false,
-    trashed: false,
-    can_download: true,
-    upload_text: "My five-minute editing workflow for short-form videos. Save this for your next edit.\n\n#VideoEditing #ContentCreator",
-    upload_text_revision: 2,
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "6",
-    drive_file_id: "demo-6",
-    name: "product-flatlay.jpg",
-    mime_type: "image/jpeg",
-    folder_path: "Creator Studio / Product Reviews",
-    size_bytes: 4299161,
-    starred: false,
-    trashed: false,
-    can_download: true,
-    upload_text: "",
-    upload_text_revision: 0,
-    updated_at: new Date().toISOString(),
-  },
-];
-
-function getFallbackData<T>(path: string, init?: RequestInit): T {
-  if (path.includes("accessible_media")) {
-    return fallbackMedia as unknown as T;
-  }
-  if (path.includes("rpc/update_media_upload_text")) {
-    let bodyObj: { p_media_id?: string; p_text?: string; p_expected_revision?: number } = {};
-    try {
-      if (typeof init?.body === "string") bodyObj = JSON.parse(init.body);
-    } catch {}
-    const found = fallbackMedia.find((m) => m.id === bodyObj.p_media_id);
-    if (found) {
-      found.upload_text = bodyObj.p_text ?? "";
-      found.upload_text_revision = Number(found.upload_text_revision ?? 0) + 1;
-      found.updated_at = new Date().toISOString();
-      return [found] as unknown as T;
-    }
-    return [
-      {
-        id: bodyObj.p_media_id ?? "1",
-        drive_file_id: "demo-item",
-        name: "media-item.mp4",
-        mime_type: "video/mp4",
-        folder_path: "My Drive",
-        size_bytes: 1048576,
-        starred: false,
-        trashed: false,
-        can_download: true,
-        upload_text: bodyObj.p_text ?? "",
-        upload_text_revision: (bodyObj.p_expected_revision ?? 0) + 1,
-        updated_at: new Date().toISOString(),
-      },
-    ] as unknown as T;
-  }
-  if (path.includes("workspace_members")) {
-    return [{ workspace_id: "ws-default", role: "owner" }] as unknown as T;
-  }
-  if (path.includes("folder_grants")) {
-    return [
-      { id: "fg-root", drive_folder_id: "root", folder_name: "Content Workspace", member_id: null },
-    ] as unknown as T;
-  }
-  return [] as unknown as T;
-}
-
 export async function supabase<T>(auth: AuthContext, path: string, init?: RequestInit): Promise<T> {
   const supabaseUrl = process.env.SUPABASE_URL;
   const anonKey = process.env.SUPABASE_ANON_KEY;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (supabaseUrl && (anonKey || serviceKey)) {
-    const isService = auth.userId === "admin-user" && Boolean(serviceKey);
-    const useKey = isService ? serviceKey! : anonKey!;
-    const useAuth = isService ? `Bearer ${serviceKey}` : `Bearer ${auth.token}`;
-    try {
-      const response = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
-        ...init,
-        headers: {
-          apikey: useKey,
-          authorization: useAuth,
-          "content-type": "application/json",
-          prefer: "return=representation",
-          ...init?.headers,
-        },
-      });
-      if (response.ok) {
-        const text = await response.text();
-        return (text ? JSON.parse(text) : null) as T;
-      }
-    } catch {
-      // Supabase request failed; fall through to fallback
-    }
-  }
-  return getFallbackData<T>(path, init);
+  if (!supabaseUrl) throw new Error("Missing SUPABASE_URL");
+  const isService = auth.userId === "admin-user" && Boolean(serviceKey);
+  const useKey = isService ? serviceKey : anonKey;
+  if (!useKey) throw new Error("Missing Supabase API key");
+  return databaseRequest<T>(supabaseUrl, useKey, isService ? useKey : auth.token, path, init);
 }
 
 export async function serviceSupabase<T>(path: string, init?: RequestInit): Promise<T> {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (supabaseUrl && key) {
-    try {
-      const response = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
-        ...init,
-        headers: {
-          apikey: key,
-          authorization: `Bearer ${key}`,
-          "content-type": "application/json",
-          prefer: "return=representation",
-          ...init?.headers,
-        },
-      });
-      if (response.ok) {
-        const text = await response.text();
-        return (text ? JSON.parse(text) : null) as T;
-      }
-    } catch {
-      // Supabase request failed; fall through to fallback
-    }
+  return databaseRequest<T>(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), env("SUPABASE_SERVICE_ROLE_KEY"), path, init);
+}
+
+async function databaseRequest<T>(url: string, key: string, token: string, path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: {
+      apikey: key,
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      prefer: "return=representation",
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { code?: string };
+    const status = body.code === "40001" ? 409 : response.status;
+    throw new Response(JSON.stringify({ error: status === 409 ? "Upload text changed elsewhere. Refresh before saving again." : "Database request failed." }), {
+      status, headers: { "content-type": "application/json" },
+    });
   }
-  return getFallbackData<T>(path, init);
+  const text = await response.text();
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 export function routeError(error: unknown) {
