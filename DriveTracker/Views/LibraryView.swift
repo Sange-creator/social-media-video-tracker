@@ -366,6 +366,13 @@ private struct LibraryVideoPosterCard: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: preview)
 
+            if isSaving {
+                Text("100% downloaded • Saving to Photos…")
+                    .font(.caption2).foregroundStyle(TrackerPalette.accent).padding(8)
+            } else if isDownloading {
+                MediaTransferProgress(identity: video.identityKey, downloads: downloads).padding(8)
+            }
+
             // Bottom Quick Action Bar
             HStack(spacing: 8) {
                 if video.status == .available || video.status == .assigned {
@@ -531,7 +538,7 @@ private struct LibraryVideoListCard: View {
 
             if isSaving {
                 VStack(spacing: 6) {
-                    Text("Saving to Photos…")
+                    Text("100% downloaded • Saving to Photos…")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(TrackerPalette.accent)
                         .multilineTextAlignment(.center)
@@ -542,25 +549,7 @@ private struct LibraryVideoListCard: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             } else if isDownloading {
-                VStack(spacing: 6) {
-                    if let progress = downloads.progressByIdentity[video.identityKey] {
-                        let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
-                        let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
-                        Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
-                            .font(.caption.monospacedDigit().weight(.bold))
-                            .foregroundStyle(TrackerPalette.accent)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                    }
-
-                    if let progress = downloads.progressByIdentity[video.identityKey] {
-                        ProgressView(value: progress.fraction)
-                            .tint(TrackerPalette.accent)
-                    } else {
-                        ProgressView()
-                            .tint(TrackerPalette.accent)
-                    }
-                }
+                MediaTransferProgress(identity: video.identityKey, downloads: downloads)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
@@ -583,7 +572,7 @@ private struct LibraryVideoListCard: View {
                         if isSaving {
                             ProgressView()
                                 .tint(TrackerPalette.accent)
-                            Text("Saving to Photos…")
+                            Text("100% downloaded • Saving to Photos…")
                         } else if isDownloading {
                             ProgressView()
                                 .tint(TrackerPalette.warning)
@@ -859,7 +848,7 @@ struct VideoDetailView: View {
 
             if state.isSavingToPhotos(video) {
                 VStack(spacing: 6) {
-                    Text("Saving to Photos…")
+                    Text("100% downloaded • Saving to Photos…")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(TrackerPalette.accent)
                         .multilineTextAlignment(.center)
@@ -869,27 +858,7 @@ struct VideoDetailView: View {
                 }
                 .padding(.vertical, 4)
             } else if state.isDownloading(video) {
-                VStack(spacing: 6) {
-                    if let progress = state.downloads.progressByIdentity[video.identityKey] {
-                        let writtenMB = ByteCountFormatter.string(fromByteCount: progress.bytesWritten, countStyle: .file)
-                        let totalMB = progress.totalBytes > 0 ? ByteCountFormatter.string(fromByteCount: progress.totalBytes, countStyle: .file) : "..."
-                        Text("Downloading \(writtenMB) / \(totalMB) (\(Int(progress.fraction * 100))%)")
-                            .font(.caption.monospacedDigit().weight(.bold))
-                            .foregroundStyle(TrackerPalette.accent)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                        ProgressView(value: progress.fraction)
-                            .tint(TrackerPalette.accent)
-                    } else {
-                        Text("Connecting download…")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(TrackerPalette.muted)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                        ProgressView()
-                            .tint(TrackerPalette.accent)
-                    }
-                }
+                MediaTransferProgress(identity: video.identityKey, downloads: state.downloads)
                 .padding(.vertical, 4)
             }
 

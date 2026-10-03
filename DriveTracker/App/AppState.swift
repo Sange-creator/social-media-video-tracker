@@ -645,10 +645,12 @@ final class AppState: ObservableObject {
             }
             try assignmentEngine.markDownloadStarted(video, context: context)
             let request = try await api.downloadRequest(for: video)
+            try Task.checkCancellation()
             let localURL = try await downloads.download(
                 request: request,
                 identity: video.identityKey,
-                expectedFileName: video.name
+                expectedFileName: video.name,
+                expectedSize: video.size
             )
             defer { try? FileManager.default.removeItem(at: localURL) }
             savingIdentities.insert(video.identityKey)
@@ -697,11 +699,12 @@ final class AppState: ObservableObject {
             return
         }
         Task {
-            for video in assignedVideos {
-                guard !Task.isCancelled else { break }
-                guard !activeDownloadIdentities.contains(video.identityKey) else { continue }
-                await download(video, context: context)
-            }
+            await DownloadBatch.run(assignedVideos.map { video in
+                {
+                    self.startParallelDownload(video, context: context)
+                    await self.activeDownloadTasks[video.identityKey]?.value
+                }
+            })
         }
     }
 
@@ -716,11 +719,12 @@ final class AppState: ObservableObject {
             return
         }
         Task {
-            for photo in photosToDownload {
-                guard !Task.isCancelled else { break }
-                guard !activeDownloadIdentities.contains(photo.identityKey) else { continue }
-                await download(photo, context: context)
-            }
+            await DownloadBatch.run(photosToDownload.map { photo in
+                {
+                    self.startParallelDownload(photo, context: context)
+                    await self.activeDownloadTasks[photo.identityKey]?.value
+                }
+            })
         }
     }
 
@@ -1114,10 +1118,12 @@ final class AppState: ObservableObject {
                 throw DriveAssociationError.videoMissing
             }
             let request = try await api.downloadRequest(for: video)
+            try Task.checkCancellation()
             let localURL = try await downloads.download(
                 request: request,
                 identity: video.identityKey,
-                expectedFileName: video.name
+                expectedFileName: video.name,
+                expectedSize: video.size
             )
             defer { try? FileManager.default.removeItem(at: localURL) }
             savingIdentities.insert(video.identityKey)

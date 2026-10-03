@@ -51,23 +51,27 @@ nonisolated final class ProgressThrottle: @unchecked Sendable {
 
 nonisolated final class TaskMetadataRegistry: @unchecked Sendable {
     private let lock = NSLock()
-    private var expectedFileNameByTask: [Int: String] = [:]
+    struct Metadata {
+        let fileName: String?
+        let size: Int64?
+    }
+    private var metadataByTask: [Int: Metadata] = [:]
 
-    nonisolated func set(expectedFileName: String, for taskID: Int) {
+    nonisolated func set(expectedFileName: String?, expectedSize: Int64?, for taskID: Int) {
         lock.lock()
-        expectedFileNameByTask[taskID] = expectedFileName
+        metadataByTask[taskID] = Metadata(fileName: expectedFileName, size: expectedSize)
         lock.unlock()
     }
 
-    nonisolated func get(for taskID: Int) -> String? {
+    nonisolated func get(for taskID: Int) -> Metadata? {
         lock.lock()
         defer { lock.unlock() }
-        return expectedFileNameByTask[taskID]
+        return metadataByTask[taskID]
     }
 
     nonisolated func remove(for taskID: Int) {
         lock.lock()
-        expectedFileNameByTask.removeValue(forKey: taskID)
+        metadataByTask.removeValue(forKey: taskID)
         lock.unlock()
     }
 }
@@ -78,6 +82,16 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         let fraction: Double
         let bytesWritten: Int64
         let totalBytes: Int64
+
+        nonisolated static func transfer(bytesWritten: Int64, responseSize: Int64, expectedSize: Int64?) -> Self {
+            let total = responseSize > 0 ? responseSize : max(0, expectedSize ?? 0)
+            let written = max(0, bytesWritten)
+            return Self(
+                fraction: total > 0 ? min(1, Double(written) / Double(total)) : 0,
+                bytesWritten: written,
+                totalBytes: total
+            )
+        }
     }
 
     @Published private(set) var progressByIdentity: [String: ProgressState] = [:]
@@ -111,14 +125,12 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         return created
     }
 
-    func download(request: URLRequest, identity: String, expectedFileName: String? = nil) async throws -> URL {
+    func download(request: URLRequest, identity: String, expectedFileName: String? = nil, expectedSize: Int64? = nil) async throws -> URL {
         let task = session.downloadTask(with: request)
         task.taskDescription = identity
         identityByTask[task.taskIdentifier] = identity
-        if let expectedFileName {
-            taskMetadata.set(expectedFileName: expectedFileName, for: task.taskIdentifier)
-        }
-        progressByIdentity[identity] = ProgressState(fraction: 0, bytesWritten: 0, totalBytes: 0)
+        taskMetadata.set(expectedFileName: expectedFileName, expectedSize: expectedSize, for: task.taskIdentifier)
+        progressByIdentity[identity] = .transfer(bytesWritten: 0, responseSize: 0, expectedSize: expectedSize)
         incrementActiveDownloads()
 
         return try await withTaskCancellationHandler {
@@ -202,7 +214,9 @@ final class DownloadCoordinator: NSObject, ObservableObject {
         }
     }
 
-    private func updateProgress(identity: String, state: ProgressState) {
+    private func updateProgress(taskID: Int, identity: String, state: ProgressState) {
+        // Delegate updates may reach the main actor after completion.
+        guard identityByTask[taskID] == identity else { return }
         progressByIdentity[identity] = state
     }
 
@@ -227,21 +241,17 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
         totalBytesExpectedToWrite: Int64
     ) {
         guard let identity = downloadTask.taskDescription else { return }
-        let isComplete = totalBytesWritten >= totalBytesExpectedToWrite && totalBytesExpectedToWrite > 0
+        let state = ProgressState.transfer(
+            bytesWritten: totalBytesWritten,
+            responseSize: totalBytesExpectedToWrite,
+            expectedSize: taskMetadata.get(for: downloadTask.taskIdentifier)?.size
+        )
+        let isComplete = state.totalBytes > 0 && state.bytesWritten >= state.totalBytes
         guard throttle.shouldDispatch(identity: identity, interval: minimumProgressUpdateInterval, isComplete: isComplete) else {
             return
         }
-
-        let fraction = totalBytesExpectedToWrite > 0
-            ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-            : 0
-        let state = ProgressState(
-            fraction: fraction,
-            bytesWritten: totalBytesWritten,
-            totalBytes: totalBytesExpectedToWrite
-        )
         Task { @MainActor [weak self] in
-            self?.updateProgress(identity: identity, state: state)
+            self?.updateProgress(taskID: downloadTask.taskIdentifier, identity: identity, state: state)
         }
     }
 
@@ -263,7 +273,7 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
             // Determine safe video extension for Apple Photos
-            let expectedFileName = taskMetadata.get(for: taskID)
+            let expectedFileName = taskMetadata.get(for: taskID)?.fileName
             let expectedExtension = (expectedFileName as NSString?)?.pathExtension.lowercased() ?? ""
             let suggestedName = downloadTask.response?.suggestedFilename ?? ""
             let suggestedExtension = (suggestedName as NSString).pathExtension.lowercased()
@@ -331,6 +341,28 @@ extension DownloadCoordinator: URLSessionDownloadDelegate, URLSessionTaskDelegat
     nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         Task { @MainActor in
             DriveTrackerAppDelegate.finishBackgroundSessionEvents()
+        }
+    }
+}
+
+/// Small batches overlap transfers without starting every file in a large library.
+@MainActor
+enum DownloadBatch {
+    static func run(_ operations: [@MainActor () async -> Void], limit: Int = 2) async {
+        let width = max(1, limit)
+        for start in stride(from: 0, to: operations.count, by: width) {
+            guard !Task.isCancelled else { return }
+            let tasks = operations[start..<min(start + width, operations.count)].map { operation in
+                Task { @MainActor in
+                    guard !Task.isCancelled else { return }
+                    await operation()
+                }
+            }
+            await withTaskCancellationHandler {
+                for task in tasks { await task.value }
+            } onCancel: {
+                for task in tasks { task.cancel() }
+            }
         }
     }
 }

@@ -238,7 +238,11 @@ private struct TodayDownloadControl: View {
     var body: some View {
         Group {
             if state.isSavingToPhotos(video) {
-                ProgressView().accessibilityLabel("Saving to Photos")
+                VStack(spacing: 4) {
+                    Text("100%").font(.caption.monospacedDigit())
+                    ProgressView()
+                    Text("Saving…").font(.caption2)
+                }.accessibilityLabel("Downloaded 100 percent, verifying and saving to Photos")
             } else if let progress = downloads.progressByIdentity[video.identityKey] {
                 Button { state.cancelDownload(video) } label: {
                     VStack(spacing: 4) {
@@ -253,6 +257,14 @@ private struct TodayDownloadControl: View {
                         }
                     }
                 }.accessibilityLabel("Cancel download")
+            } else if state.isDownloading(video) {
+                Button { state.cancelDownload(video) } label: {
+                    VStack(spacing: 4) {
+                        if video.size ?? 0 > 0 { Text("0%").font(.caption.monospacedDigit()) }
+                        ProgressView()
+                        Text("Connecting…").font(.caption2)
+                    }
+                }.accessibilityLabel("Connecting to Drive, cancel download")
             } else if video.status == .uploaded {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(TrackerPalette.success)
             } else if video.status == .downloaded && !video.isPhoto {
@@ -445,7 +457,7 @@ private struct ManualVideoPickerView: View {
                                 if state.isSavingToPhotos(video) {
                                     VStack(spacing: 6) {
                                         HStack {
-                                            Text("Saving to Photos…")
+                                            Text("100% downloaded • Saving to Photos…")
                                                 .font(.caption2.weight(.bold))
                                                 .foregroundStyle(TrackerPalette.accent)
                                             Spacer()
@@ -580,6 +592,7 @@ enum TodayDownloadProgress {
 }
 
 private struct TodayAccountDownloadProgress: View {
+    @EnvironmentObject private var state: AppState
     let videos: [VideoAsset]
     let quota: Int
     @ObservedObject var downloads: DownloadCoordinator
@@ -587,7 +600,7 @@ private struct TodayAccountDownloadProgress: View {
     var body: some View {
         let completed = videos.filter { $0.downloadedAt != nil }.count
         let partials = videos.filter { $0.downloadedAt == nil }.compactMap {
-            downloads.progressByIdentity[$0.identityKey]?.fraction
+            state.isSavingToPhotos($0) ? 1 : downloads.progressByIdentity[$0.identityKey]?.fraction
         }
         let total = max(quota, videos.count)
         let fraction = TodayDownloadProgress.fraction(completed: completed, partials: partials, total: total)
