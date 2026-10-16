@@ -87,6 +87,13 @@ enum ModelContainerFactory {
             let context = container.mainContext
             let account = TikTokAccount(googleUserID: "navigation-test", driveFolderID: "test-folder", folderName: "Navigation Test", dailyQuota: 3)
             context.insert(account)
+            account.captionDocumentID = "test-document"
+            account.captionDocumentName = "Sample titles"
+            account.captionDocumentText = (1...6).map { "Video \($0)\nTitle: Sample title \($0)\nHashtags: #sample #video\($0)" }.joined(separator: "\n\n")
+            let facebook = TikTokAccount(googleUserID: "navigation-test", driveFolderID: "facebook-test", folderName: "Facebook Test", dailyQuota: 3)
+            facebook.uploadPlatform = .facebook
+            facebook.targetTimeZoneID = "America/New_York"
+            context.insert(facebook)
             for index in 1...6 {
                 let video = VideoAsset(driveFileID: "test-\(index)", accountFolderID: account.driveFolderID, googleUserID: account.googleUserID,
                                        name: "Video \(index).mp4", mimeType: "video/mp4", account: account)

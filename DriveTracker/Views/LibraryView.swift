@@ -863,6 +863,8 @@ struct VideoDetailView: View {
             }
 
             TrackerSectionLabel(title: "Actions")
+            Button("Copy title & hashtags", systemImage: "doc.on.clipboard") { state.copyCaption(for: video) }
+                .buttonStyle(TrackerActionButtonStyle(kind: .primary))
             actionButtons
         }
         .trackerCard(padding: 16)
@@ -1311,6 +1313,9 @@ struct VideoPreviewView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .trackerCard(padding: 14)
+
+                    Button("Copy title & hashtags", systemImage: "doc.on.clipboard") { state.copyCaption(for: video) }
+                        .buttonStyle(TrackerActionButtonStyle(kind: .primary))
 
                     // Upload Text / Caption & Hashtags Block
                     VStack(alignment: .leading, spacing: 10) {

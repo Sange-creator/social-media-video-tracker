@@ -140,6 +140,32 @@ final class TikTokAccount {
     var copyQueueLastSyncedAt: Date?
     var copyQueueIssue: String?
 
+    var uploadPlatformRawValue: String? = nil
+    var captionDocumentChoices: String? = nil
+    var captionDocumentID: String? = nil
+    var captionDocumentName: String? = nil
+    var captionDocumentText: String? = nil
+    var captionDocumentModifiedAt: Date? = nil
+    var captionDocumentSyncedAt: Date? = nil
+    var captionDocumentIssue: String? = nil
+
+    var uploadPlatform: UploadPlatform? {
+        get { uploadPlatformRawValue.flatMap(UploadPlatform.init(rawValue:)) }
+        set { uploadPlatformRawValue = newValue?.rawValue }
+    }
+
+    var scheduleSummary: String {
+        let zone = targetTimeZoneID ?? "Local day · app reminder timezone"
+        return "\(zone.replacingOccurrences(of: "_", with: " ")) · \(preferredSlot1Hour):00 / \(preferredSlot2Hour):00 / \(preferredSlot3Hour):00"
+    }
+
+    var postingCalendar: Calendar {
+        var calendar = Calendar.autoupdatingCurrent
+        // Keep the existing local-day behavior until a timezone is explicitly chosen.
+        if let targetTimeZoneID, let zone = TimeZone(identifier: targetTimeZoneID) { calendar.timeZone = zone }
+        return calendar
+    }
+
     // Time & Scheduling Settings
     var targetTimeZoneID: String? = nil
     var preferredSlot1Hour: Int = 9

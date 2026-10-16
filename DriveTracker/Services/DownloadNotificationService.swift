@@ -52,50 +52,39 @@ final class DownloadNotificationService {
             .compactMap(\.first?.account)
             .sorted { $0.sortOrder < $1.sortOrder }
 
-        // iOS keeps at most 64 pending local notifications. Four six-hour
-        // windows × fifteen accounts stays under that cap, while the common
-        // ten-account setup produces ten reminders per window.
-        let scheduledAccounts = Array(accounts.prefix(15))
-        let burstDates = nextBurstDates(after: now, calendar: selectedCalendar)
-
-        for (burstIndex, burstDate) in burstDates.enumerated() {
-            for (accountIndex, account) in scheduledAccounts.enumerated() {
-                let accountAssignments = (assignmentsByAccount[account.id] ?? [])
-                    .sorted { $0.slot < $1.slot }
-                guard !accountAssignments.isEmpty else { continue }
-                let assignment = accountAssignments[burstIndex % accountAssignments.count]
-                guard let video = assignment.video else { continue }
-                let minuteOffset = accountIndex * 5
-                guard let fireDate = selectedCalendar.date(
-                    byAdding: .minute,
-                    value: minuteOffset,
-                    to: burstDate
-                ) else { continue }
-
-                let content = UNMutableNotificationContent()
-                content.title = "Download reminder"
-                content.body = "\(account.displayName) • \(video.name)"
-                content.sound = .default
-                content.userInfo = [
-                    "accountID": account.id.uuidString,
-                    "videoID": video.identityKey
-                ]
-                let trigger = UNCalendarNotificationTrigger(
-                    dateMatching: selectedCalendar.dateComponents(
-                        [.year, .month, .day, .hour, .minute],
-                        from: fireDate
-                    ),
-                    repeats: false
-                )
-                let identifier = "\(prefix)\(burstIndex)-\(account.id.uuidString)"
-                try? await center.add(
-                    UNNotificationRequest(
-                        identifier: identifier,
-                        content: content,
-                        trigger: trigger
-                    )
-                )
+        var reminders: [(date: Date, calendar: Calendar, account: TikTokAccount, assignment: DailyAssignment)] = []
+        for (accountIndex, account) in accounts.enumerated() where account.remindersEnabled {
+            let items = (assignmentsByAccount[account.id] ?? []).sorted { $0.slot < $1.slot }
+            guard !items.isEmpty else { continue }
+            if account.targetTimeZoneID != nil {
+                let calendar = account.postingCalendar
+                let hours = [account.preferredSlot1Hour, account.preferredSlot2Hour, account.preferredSlot3Hour]
+                for (index, assignment) in items.enumerated() {
+                    guard let date = calendar.nextDate(after: now,
+                        matching: DateComponents(hour: hours[index % hours.count], minute: 0),
+                        matchingPolicy: .nextTime, repeatedTimePolicy: .first) else { continue }
+                    reminders.append((date, calendar, account, assignment))
+                }
+            } else {
+                // Retain the previous reminder windows until a schedule is explicitly configured.
+                for (index, burst) in nextBurstDates(after: now, calendar: selectedCalendar).enumerated() {
+                    guard let date = selectedCalendar.date(byAdding: .minute, value: accountIndex * 5, to: burst) else { continue }
+                    reminders.append((date, selectedCalendar, account, items[index % items.count]))
+                }
             }
+        }
+        // Keep the earliest reminders across every account within iOS's pending request limit.
+        for (index, reminder) in reminders.sorted(by: { $0.date < $1.date }).prefix(60).enumerated() {
+            guard let video = reminder.assignment.video else { continue }
+            let content = UNMutableNotificationContent()
+            content.title = "\(reminder.account.uploadPlatform?.rawValue ?? "Upload") reminder"
+            content.body = "\(reminder.account.displayName) • \(video.name)"
+            content.sound = .default
+            content.userInfo = ["accountID": reminder.account.id.uuidString, "videoID": video.identityKey]
+            var components = reminder.calendar.dateComponents([.year, .month, .day, .hour, .minute], from: reminder.date)
+            components.timeZone = reminder.calendar.timeZone
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+            try? await center.add(UNNotificationRequest(identifier: "\(prefix)\(index)-\(reminder.account.id)", content: content, trigger: trigger))
         }
     }
 

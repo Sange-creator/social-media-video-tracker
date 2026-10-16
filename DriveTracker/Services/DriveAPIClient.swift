@@ -419,6 +419,15 @@ final class DriveAPIClient {
         return try? decoder.decode(FileThumbResponse.self, from: rawData).thumbnailLink
     }
 
+    func exportCaptionDocument(id: String, resourceKey: String? = nil) async throws -> String {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(id)/export")
+        components?.queryItems = [URLQueryItem(name: "mimeType", value: "text/plain")]
+        guard let url = components?.url else { throw DriveAPIError.malformedURL }
+        let bytes = try await data(for: authorizedRequest(url: url, resourceKeys: resourceHeader(id: id, key: resourceKey)))
+        guard let text = String(data: bytes, encoding: .utf8) else { throw DriveAPIError.invalidResponse }
+        return text
+    }
+
     func exportSpreadsheetCSV(
         id: String,
         resourceKey: String? = nil

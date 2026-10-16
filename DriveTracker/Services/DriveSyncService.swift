@@ -13,8 +13,14 @@ protocol DriveMetadataAPI {
     var currentUserID: String? { get }
     func item(id: String, resourceKey: String?) async throws -> DriveItem
     func listChildren(of folderID: String, folderResourceKey: String?) async throws -> [DriveItem]
+    func exportCaptionDocument(id: String, resourceKey: String?) async throws -> String
 }
 
+extension DriveMetadataAPI {
+    func exportCaptionDocument(id: String, resourceKey: String?) async throws -> String {
+        throw DriveAPIError.invalidResponse
+    }
+}
 extension DriveAPIClient: DriveMetadataAPI {}
 
 @MainActor
@@ -79,13 +85,14 @@ final class DriveSyncService {
         var hasPersistentChanges = false
 
         var visitedFolders = Set<String>()
+        var documents: [DriveItem] = []
         // Keep a visited set because shared Drive folder structures can expose
         // the same folder more than once; recursion must never loop forever.
         let locatedVideos = try await recursivelyListVideos(
             folderID: root.folderID,
             resourceKey: root.resourceKey,
             path: account.folderName,
-            visitedFolders: &visitedFolders
+            visitedFolders: &visitedFolders, documents: &documents
         )
 
         try Task.checkCancellation()
@@ -175,6 +182,10 @@ final class DriveSyncService {
             }
         }
 
+        await syncCaptions(documents: documents, account: account)
+        try Task.checkCancellation()
+        guard api.currentUserID == googleUserID else { throw GoogleAuthError.notSignedIn }
+
         // Anything previously known but absent from this complete scan is
         // marked missing. We retain it so old status events and assignments remain
         // inspectable and can recover if the file returns to Drive.
@@ -193,7 +204,7 @@ final class DriveSyncService {
         }
         // An unchanged scan should not write the whole context and invalidate
         // every SwiftData-backed screen. This was the largest recurring hitch.
-        if hasPersistentChanges {
+        if hasPersistentChanges || context.hasChanges {
             try context.save()
         }
         return DriveSyncResult(
@@ -202,6 +213,49 @@ final class DriveSyncService {
             newVideos: newVideos,
             folderIDs: visitedFolders
         )
+    }
+
+    private func syncCaptions(documents: [DriveItem], account: TikTokAccount) async {
+        let byID: [String: DriveItem] = Dictionary(documents.map { ($0.effectiveID, $0) }, uniquingKeysWith: { first, _ in first })
+        let unique: [DriveItem] = byID.values.sorted { lhs, rhs in
+            if lhs.name == rhs.name { return lhs.effectiveID < rhs.effectiveID }
+            return lhs.name < rhs.name
+        }
+        let candidates = unique.map { CaptionDocumentChoice(id: $0.effectiveID, name: $0.name) }
+        let choicesJSON = (try? JSONEncoder().encode(candidates)).flatMap { String(data: $0, encoding: .utf8) }
+        if account.captionDocumentChoices != choicesJSON { account.captionDocumentChoices = choicesJSON }
+        let selected: DriveItem?
+        if let id = account.captionDocumentID {
+            selected = unique.first { $0.effectiveID == id }
+        } else {
+            selected = unique.count == 1 ? unique.first : nil
+        }
+        guard let selected else {
+            let issue = unique.count > 1
+                ? "Multiple documents found. Choose the metadata document in account settings."
+                : "No metadata document found. Add a Google Docs document to this account folder."
+            if account.captionDocumentIssue != issue { account.captionDocumentIssue = issue }
+            if account.captionDocumentText != nil { account.captionDocumentText = nil }
+            return
+        }
+        guard account.captionDocumentText == nil || account.captionDocumentID != selected.effectiveID ||
+              selected.modifiedDate == nil || account.captionDocumentModifiedAt != selected.modifiedDate else {
+            if account.captionDocumentIssue != nil { account.captionDocumentIssue = nil }
+            return
+        }
+        do {
+            let text = try await api.exportCaptionDocument(id: selected.effectiveID, resourceKey: selected.effectiveResourceKey)
+            try Task.checkCancellation()
+            guard account.modelContext != nil, !account.isDeleted, api.currentUserID == account.googleUserID else { return }
+            account.captionDocumentID = selected.effectiveID
+            account.captionDocumentName = selected.name
+            account.captionDocumentText = text
+            account.captionDocumentModifiedAt = selected.modifiedDate
+            account.captionDocumentSyncedAt = .now
+            account.captionDocumentIssue = nil
+        } catch {
+            account.captionDocumentIssue = "Metadata refresh failed. Sync this folder to retry."
+        }
     }
 
     private struct LocatedVideo {
@@ -213,10 +267,12 @@ final class DriveSyncService {
         folderID: String,
         resourceKey: String?,
         path: String,
-        visitedFolders: inout Set<String>
+        visitedFolders: inout Set<String>,
+        documents: inout [DriveItem]
     ) async throws -> [LocatedVideo] {
         guard visitedFolders.insert(folderID).inserted else { return [] }
         let children = try await api.listChildren(of: folderID, folderResourceKey: resourceKey)
+        documents.append(contentsOf: children.filter { $0.effectiveMimeType == "application/vnd.google-apps.document" })
         var videos = children.filter(\.isMedia).map {
             LocatedVideo(item: $0, folderPath: path)
         }
@@ -226,7 +282,7 @@ final class DriveSyncService {
                     folderID: folder.effectiveID,
                     resourceKey: folder.effectiveResourceKey,
                     path: "\(path) / \(folder.name)",
-                    visitedFolders: &visitedFolders
+                    visitedFolders: &visitedFolders, documents: &documents
                 )
             )
         }

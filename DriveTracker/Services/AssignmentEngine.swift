@@ -27,13 +27,13 @@ struct AssignmentEngine {
             assignment.isActive = false
             assignment.updatedAt = date
         }
-        let dayKey = DayKey.value(for: date)
+        let dayKey = DayKey.value(for: date, calendar: account.postingCalendar)
         var outstanding = account.videos.filter {
             $0.isVideo && ($0.status == .assigned || $0.status == .downloaded)
         }
         let completedToday = account.videos.filter {
             guard $0.isVideo, let uploadedAt = $0.uploadedAt else { return false }
-            return DayKey.value(for: uploadedAt) == dayKey
+            return DayKey.value(for: uploadedAt, calendar: account.postingCalendar) == dayKey
         }.count
         let targetOutstanding = max(0, account.dailyQuota - completedToday)
 
@@ -135,7 +135,7 @@ struct AssignmentEngine {
             return nil
         }
 
-        let dayKey = DayKey.value(for: date)
+        let dayKey = DayKey.value(for: date, calendar: account.postingCalendar)
         let replaceable = account.assignments
             .filter { $0.isActive && $0.video?.status == .assigned }
             .sorted { $0.assignedAt < $1.assignedAt }

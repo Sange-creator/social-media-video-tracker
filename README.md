@@ -379,3 +379,25 @@ DriveTracker/
 Copyright © 2026 Social Media Video Tracker contributors.
 
 Released under the [MIT License](LICENSE).
+
+## Daily upload streams and document captions
+
+Today has separate TikTok and Facebook streams. Assign existing or new accounts using **Manage platform assignments**, or change the platform in Accounts. Unassigned accounts remain visible in the assignment flow and retain their existing history and media.
+
+Use **Schedule** in either stream to apply a city timezone and three posting hours to that stream's accounts. Individual account settings can override these. Explicit city schedules use the selected timezone for reminders and daily completion boundaries, with daylight saving handled automatically. Accounts without an explicit city retain their previous daily behavior.
+
+Put a Google Docs document inside each account's selected Drive folder, using this format:
+
+```text
+Video 001
+Title: Your video title
+Hashtags: #first #second
+
+Video 002
+Title: Another title
+Hashtags: #another
+```
+
+Name each video with one numeric identifier, such as `Video 001.mp4`. Leading zeroes are ignored; filenames with multiple numbers, duplicate document entries, and incomplete entries are rejected. The **Copy title & hashtags** action is available in Today actions, the video preview, and Library details. It copies the title, a blank line, and hashtags. Existing manually edited upload text remains separate.
+
+Folder synchronization discovers and caches its document. If multiple documents exist, choose the source under **Accounts → Titles & hashtags document**, then refresh that folder. Unchanged documents are not exported again. Cached captions can be copied offline; a failed refresh is disclosed when copying cached content. Document changes follow the existing targeted folder synchronization; switching Daily tabs and copying never start a full Drive scan. This version supports native Google Docs documents, not uploaded Word files.

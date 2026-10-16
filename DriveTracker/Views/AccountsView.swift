@@ -52,6 +52,7 @@ struct AccountEditorView: View {
     @State private var draftPaused = false
     @State private var draftIconSymbol = "sparkles"
     @State private var draftIconColor = "#4F46E5"
+    @State private var draftPlatform = ""
     @State private var draftTimeZoneID: String = ""
     @State private var draftSlot1Hour: Int = 9
     @State private var draftSlot2Hour: Int = 13
@@ -120,15 +121,19 @@ struct AccountEditorView: View {
                 TrackerSectionLabel(title: "Managed account")
             }
 
+            Section("Upload stream") {
+                Picker("Platform", selection: $draftPlatform) {
+                    Text("Unassigned").tag("")
+                    ForEach(UploadPlatform.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }
+            }
+            AccountCaptionSettings(account: account)
+
             Section {
                 Picker("Target time zone", selection: $draftTimeZoneID) {
                     Text("App default (\(state.reminderTimeZoneID.split(separator: "/").last ?? "ET"))").tag("")
-                    ForEach(CreatorReminderTimeZone.groupedByRegion) { group in
-                        Section(header: Text("\(group.flag) \(group.name)")) {
-                            ForEach(group.zones) { zone in
-                                Text("\(zone.flag) \(zone.title) (\(zone.shortTitle))").tag(zone.rawValue)
-                            }
-                        }
+                    ForEach(TimeZone.knownTimeZoneIdentifiers, id: \.self) { id in
+                        Text(id.replacingOccurrences(of: "_", with: " ")).tag(id)
                     }
                 }
 
@@ -258,6 +263,7 @@ struct AccountEditorView: View {
             draftPaused = account.isPaused
             draftIconSymbol = account.iconSymbol
             draftIconColor = account.iconColorHex
+            draftPlatform = account.uploadPlatformRawValue ?? ""
             draftTimeZoneID = account.targetTimeZoneID ?? ""
             draftSlot1Hour = account.preferredSlot1Hour
             draftSlot2Hour = account.preferredSlot2Hour
@@ -308,6 +314,7 @@ struct AccountEditorView: View {
         let style = AccountIconCatalog.style(forName: cleanName, fallbackID: account.id)
         account.iconSymbol = style.symbol
         account.iconColorHex = style.colorHex
+        account.uploadPlatformRawValue = draftPlatform.isEmpty ? nil : draftPlatform
         account.targetTimeZoneID = draftTimeZoneID.isEmpty ? nil : draftTimeZoneID
         account.preferredSlot1Hour = draftSlot1Hour
         account.preferredSlot2Hour = draftSlot2Hour

@@ -23,6 +23,11 @@ final class BackupServiceTests: XCTestCase {
             sourceID: driveSource.id,
             googleEmail: driveSource.googleEmail
         )
+        account.uploadPlatform = .facebook
+        account.targetTimeZoneID = "Asia/Kathmandu"
+        account.preferredSlot1Hour = 7
+        account.captionDocumentID = "metadata-doc"
+        account.captionDocumentText = "Video 1\nTitle: Backup\nHashtags: #backup"
         sourceContext.insert(account)
         let video = VideoAsset(
             driveFileID: "backup-video",
@@ -93,6 +98,10 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(restoredSources.count, 1)
         XCTAssertEqual(restoredSources[0].displayName, "Content Root")
         XCTAssertEqual(restoredAccounts.count, 1)
+        XCTAssertEqual(restoredAccounts[0].uploadPlatform, .facebook)
+        XCTAssertEqual(restoredAccounts[0].targetTimeZoneID, "Asia/Kathmandu")
+        XCTAssertEqual(restoredAccounts[0].preferredSlot1Hour, 7)
+        XCTAssertEqual(restoredAccounts[0].captionDocumentText, account.captionDocumentText)
         XCTAssertEqual(restoredAccounts[0].sourceID, restoredSources[0].id)
         XCTAssertEqual(restoredVideos.count, 1)
         XCTAssertEqual(restoredVideos[0].status, .uploaded)

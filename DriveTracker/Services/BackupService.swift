@@ -57,6 +57,19 @@ struct TrackerBackup: Codable {
         let copyQueueSheetResourceKey: String?
         let copyQueueLastSyncedAt: Date?
         let copyQueueIssue: String?
+        var uploadPlatformRawValue: String? = nil
+        var targetTimeZoneID: String? = nil
+        var preferredSlot1Hour: Int? = nil
+        var preferredSlot2Hour: Int? = nil
+        var preferredSlot3Hour: Int? = nil
+        var remindersEnabled: Bool? = nil
+        var captionDocumentChoices: String? = nil
+        var captionDocumentID: String? = nil
+        var captionDocumentName: String? = nil
+        var captionDocumentText: String? = nil
+        var captionDocumentModifiedAt: Date? = nil
+        var captionDocumentSyncedAt: Date? = nil
+        var captionDocumentIssue: String? = nil
     }
 
     struct VideoRecord: Codable {
@@ -352,7 +365,20 @@ final class BackupService {
                     copyQueueSheetID: $0.copyQueueSheetID,
                     copyQueueSheetResourceKey: $0.copyQueueSheetResourceKey,
                     copyQueueLastSyncedAt: $0.copyQueueLastSyncedAt,
-                    copyQueueIssue: $0.copyQueueIssue
+                    copyQueueIssue: $0.copyQueueIssue,
+                    uploadPlatformRawValue: $0.uploadPlatformRawValue,
+                    targetTimeZoneID: $0.targetTimeZoneID,
+                    preferredSlot1Hour: $0.preferredSlot1Hour,
+                    preferredSlot2Hour: $0.preferredSlot2Hour,
+                    preferredSlot3Hour: $0.preferredSlot3Hour,
+                    remindersEnabled: $0.remindersEnabled,
+                    captionDocumentChoices: $0.captionDocumentChoices,
+                    captionDocumentID: $0.captionDocumentID,
+                    captionDocumentName: $0.captionDocumentName,
+                    captionDocumentText: $0.captionDocumentText,
+                    captionDocumentModifiedAt: $0.captionDocumentModifiedAt,
+                    captionDocumentSyncedAt: $0.captionDocumentSyncedAt,
+                    captionDocumentIssue: $0.captionDocumentIssue
                 )
             },
             videos: videos.compactMap { video in
@@ -492,6 +518,19 @@ final class BackupService {
             account.copyQueueSheetResourceKey = record.copyQueueSheetResourceKey
             account.copyQueueLastSyncedAt = record.copyQueueLastSyncedAt
             account.copyQueueIssue = record.copyQueueIssue
+            account.uploadPlatformRawValue = record.uploadPlatformRawValue
+            account.targetTimeZoneID = record.targetTimeZoneID
+            if let value = record.preferredSlot1Hour { account.preferredSlot1Hour = value }
+            if let value = record.preferredSlot2Hour { account.preferredSlot2Hour = value }
+            if let value = record.preferredSlot3Hour { account.preferredSlot3Hour = value }
+            if let value = record.remindersEnabled { account.remindersEnabled = value }
+            account.captionDocumentChoices = record.captionDocumentChoices
+            account.captionDocumentID = record.captionDocumentID
+            account.captionDocumentName = record.captionDocumentName
+            account.captionDocumentText = record.captionDocumentText
+            account.captionDocumentModifiedAt = record.captionDocumentModifiedAt
+            account.captionDocumentSyncedAt = record.captionDocumentSyncedAt
+            account.captionDocumentIssue = record.captionDocumentIssue
             context.insert(account)
             accountByID[record.id] = account
         }

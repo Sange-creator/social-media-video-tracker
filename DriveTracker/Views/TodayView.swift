@@ -22,13 +22,32 @@ struct TodayView: View {
 private struct TodayFeed: View {
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
     @Query private var media: [VideoAsset]
+    @AppStorage("daily.selectedPlatform") private var selectedPlatform = UploadPlatform.tiktok.rawValue
+    @State private var showSetup = false
+    @State private var showSchedule = false
+    @State private var promptedIDs = Set<UUID>()
+
+    private var unassigned: [TikTokAccount] { accounts.filter { $0.isConfigured && $0.uploadPlatform == nil } }
+    private var streamAccounts: [TikTokAccount] { accounts.filter { $0.uploadPlatformRawValue == selectedPlatform } }
 
     var body: some View {
-        let groups = TodayFeedIndex.build(accounts: accounts, media: media)
+        let groups = TodayFeedIndex.build(accounts: accounts, media: media, platform: UploadPlatform(rawValue: selectedPlatform) ?? .tiktok)
         List {
+            Section {
+                Picker("Upload platform", selection: $selectedPlatform) {
+                    ForEach(UploadPlatform.allCases) { Text($0.rawValue).tag($0.rawValue) }
+                }.pickerStyle(.segmented).accessibilityIdentifier("daily-platform-toggle")
+                HStack {
+                    Label("\(streamAccounts.count) accounts", systemImage: "person.2")
+                    Spacer()
+                    Button("Schedule", systemImage: "clock") { showSchedule = true }
+                }.font(.subheadline)
+                Button(unassigned.isEmpty ? "Manage platform assignments" : "Assign \(unassigned.count) unassigned accounts") { showSetup = true }
+                    .font(.subheadline)
+            }
             if groups.isEmpty {
-                ContentUnavailableView("No active accounts", systemImage: "folder",
-                    description: Text("Add or resume an account to see today's videos."))
+                ContentUnavailableView("No active \(selectedPlatform) accounts", systemImage: "person.2",
+                    description: Text("Assign accounts to this stream, or resume a paused account."))
             } else {
                 Section {
                     TodaySummary(completed: groups.reduce(0) { $0 + $1.completed },
@@ -43,6 +62,7 @@ private struct TodayFeed: View {
                                 AccountIdentityIcon(symbol: group.account.iconSymbol, colorHex: group.account.iconColorHex, size: 36)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(group.account.displayName).font(.headline)
+                                    Text(group.account.scheduleSummary).font(.caption).foregroundStyle(.secondary)
                                     Text("\(group.completed) of \(group.account.dailyQuota) completed" +
                                          (group.photoCount > 0 ? " · \(group.photoCount) photos" : ""))
                                         .font(.subheadline).foregroundStyle(.secondary)
@@ -66,6 +86,17 @@ private struct TodayFeed: View {
         .scrollContentBackground(.hidden)
         .background(TrackerPalette.canvas)
         .contentMargins(.vertical, 8)
+        .sheet(isPresented: $showSetup) { UploadStreamSetupView() }
+        .sheet(isPresented: $showSchedule) {
+            UploadStreamScheduleView(platform: UploadPlatform(rawValue: selectedPlatform) ?? .tiktok, accounts: streamAccounts)
+        }
+        .task(id: unassigned.map(\.id)) {
+            let ids = Set(unassigned.map(\.id))
+            if !ids.subtracting(promptedIDs).isEmpty {
+                promptedIDs.formUnion(ids)
+                showSetup = true
+            }
+        }
     }
 }
 
@@ -78,8 +109,8 @@ struct TodayFeedGroup: Identifiable {
 }
 
 enum TodayFeedIndex {
-    static func build(accounts: [TikTokAccount], media: [VideoAsset]) -> [TodayFeedGroup] {
-        let active = accounts.filter { $0.modelContext != nil && !$0.isDeleted && $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }
+    static func build(accounts: [TikTokAccount], media: [VideoAsset], platform: UploadPlatform? = nil) -> [TodayFeedGroup] {
+        let active = accounts.filter { (platform == nil || $0.uploadPlatform == platform) && $0.modelContext != nil && !$0.isDeleted && $0.isConfigured && !$0.isPaused && !$0.isMissingFromDrive }
         var groups = active.map { TodayFeedGroup(account: $0) }
         let positions = Dictionary(grouping: active.indices, by: { "\(active[$0].googleUserID)|\(active[$0].driveFolderID)" })
         for video in media where video.modelContext != nil && !video.isDeleted {
@@ -90,7 +121,10 @@ enum TodayFeedIndex {
                 for index in indices { groups[index].photoCount += 1 }
                 continue
             }
-            let completedToday = video.uploadedAt.map { DayKey.isToday($0) } ?? false
+            let completedToday = video.uploadedAt.map { date in
+                let account = active[indices.first!]
+                return DayKey.value(for: date, calendar: account.postingCalendar) == DayKey.value(for: .now, calendar: account.postingCalendar)
+            } ?? false
             guard completedToday || (!video.isMissingFromDrive && (video.status == .assigned || video.status == .downloaded)) else { continue }
             for index in indices {
                 groups[index].videos.append(video)
@@ -114,7 +148,7 @@ private struct TodaySummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(Date.now, format: .dateTime.weekday().month().day()).font(.subheadline).foregroundStyle(.secondary)
+                Text("Daily progress").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
                 Text("\(completed) / \(quota)").font(.subheadline.monospacedDigit().weight(.semibold))
             }
@@ -212,6 +246,7 @@ private struct TodayMediaActions: View {
     let video: VideoAsset
     let chooseOther: () -> Void
     var body: some View {
+        Button("Copy title & hashtags", systemImage: "doc.on.clipboard") { state.copyCaption(for: video) }
         if !video.uploadText.isEmpty {
             Button("Copy upload text", systemImage: "doc.on.clipboard") { state.copyUploadText(for: video) }
         }

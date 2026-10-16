@@ -1060,6 +1060,23 @@ final class AppState: ObservableObject {
         }
     }
 
+    func copyCaption(for video: VideoAsset) {
+        do {
+            guard let account = video.account, let document = account.captionDocumentText else {
+                errorMessage = video.account?.captionDocumentIssue ?? "Sync this account folder to load its titles and hashtags."
+                return
+            }
+            guard account.captionDocumentIssue == nil || account.captionDocumentIssue?.hasPrefix("Metadata refresh failed.") == true else {
+                errorMessage = account.captionDocumentIssue
+                return
+            }
+            let text = try VideoCaptionParser.caption(for: video.name, document: document).text
+            UIPasteboard.general.string = text
+            toastMessage = account.captionDocumentIssue == nil ? "Title and hashtags copied" : "Cached title and hashtags copied · refresh pending"
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
     func copyUploadText(for video: VideoAsset) {
         guard !video.uploadText.isEmpty else {
             errorMessage = "Add upload text to this file first."
@@ -1306,6 +1323,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    func uploadStreamsChanged(context: ModelContext) throws {
+        try context.save()
+        try ensureToday(context: context)
+        scheduleBackup(context: context)
+        Task { await scheduleDownloadNotifications(context: context) }
+    }
+
     func accountChanged(_ account: TikTokAccount, context: ModelContext) {
         account.dailyQuota = min(30, max(1, account.dailyQuota))
         account.displayName = account.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1318,6 +1342,7 @@ final class AppState: ObservableObject {
             try context.save()
             try ensureToday(context: context)
             scheduleBackup(context: context)
+            Task { await scheduleDownloadNotifications(context: context) }
         } catch {
             errorMessage = error.localizedDescription
         }
