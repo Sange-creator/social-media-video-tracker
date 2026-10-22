@@ -23,8 +23,39 @@ struct DriveItem: Decodable, Identifiable, Sendable {
     let thumbnailLink: String?
     let resourceKey: String?
     var description: String? = nil
+    let trashed: Bool?
     let capabilities: DriveCapabilities?
     let shortcutDetails: DriveShortcutDetails?
+
+    init(
+        id: String,
+        name: String,
+        mimeType: String,
+        parents: [String]? = nil,
+        size: String? = nil,
+        md5Checksum: String? = nil,
+        modifiedTime: String? = nil,
+        thumbnailLink: String? = nil,
+        resourceKey: String? = nil,
+        description: String? = nil,
+        trashed: Bool? = nil,
+        capabilities: DriveCapabilities? = nil,
+        shortcutDetails: DriveShortcutDetails? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.mimeType = mimeType
+        self.parents = parents
+        self.size = size
+        self.md5Checksum = md5Checksum
+        self.modifiedTime = modifiedTime
+        self.thumbnailLink = thumbnailLink
+        self.resourceKey = resourceKey
+        self.description = description
+        self.trashed = trashed
+        self.capabilities = capabilities
+        self.shortcutDetails = shortcutDetails
+    }
 
     static let folderMimeType = "application/vnd.google-apps.folder"
     static let shortcutMimeType = "application/vnd.google-apps.shortcut"
@@ -44,6 +75,10 @@ struct DriveItem: Decodable, Identifiable, Sendable {
 
     var isFolder: Bool {
         effectiveMimeType == Self.folderMimeType
+    }
+
+    var isTrashed: Bool {
+        trashed ?? false
     }
 
     var isPhoto: Bool {
@@ -697,6 +732,6 @@ final class DriveAPIClient {
     }
 
     private static let fields =
-        "id,name,mimeType,parents,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey,description," +
+        "id,name,mimeType,parents,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey,description,trashed," +
         "capabilities(canDownload),shortcutDetails(targetId,targetMimeType,targetResourceKey)"
 }

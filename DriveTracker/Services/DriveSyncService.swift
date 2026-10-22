@@ -6,6 +6,8 @@ struct DriveSyncResult: Equatable {
     let videosFound: Int
     let newVideos: Int
     var folderIDs: Set<String> = []
+    var visitedFolderIDs: Set<String> = []
+    var folderPaths: [String: String] = [:]
 }
 
 @MainActor
@@ -86,13 +88,14 @@ final class DriveSyncService {
 
         var visitedFolders = Set<String>()
         var documents: [DriveItem] = []
+        var folderPaths: [String: String] = [:]
         // Keep a visited set because shared Drive folder structures can expose
         // the same folder more than once; recursion must never loop forever.
         let locatedVideos = try await recursivelyListVideos(
             folderID: root.folderID,
             resourceKey: root.resourceKey,
             path: account.folderName,
-            visitedFolders: &visitedFolders, documents: &documents
+            visitedFolders: &visitedFolders, documents: &documents, folderPaths: &folderPaths
         )
 
         try Task.checkCancellation()
@@ -211,7 +214,9 @@ final class DriveSyncService {
             accountsFound: 1,
             videosFound: locatedVideos.count,
             newVideos: newVideos,
-            folderIDs: visitedFolders
+            folderIDs: visitedFolders,
+            visitedFolderIDs: visitedFolders,
+            folderPaths: folderPaths
         )
     }
 
@@ -268,9 +273,11 @@ final class DriveSyncService {
         resourceKey: String?,
         path: String,
         visitedFolders: inout Set<String>,
-        documents: inout [DriveItem]
+        documents: inout [DriveItem],
+        folderPaths: inout [String: String]
     ) async throws -> [LocatedVideo] {
         guard visitedFolders.insert(folderID).inserted else { return [] }
+        folderPaths[folderID] = path
         let children = try await api.listChildren(of: folderID, folderResourceKey: resourceKey)
         documents.append(contentsOf: children.filter { $0.effectiveMimeType == "application/vnd.google-apps.document" })
         var videos = children.filter(\.isMedia).map {
@@ -282,7 +289,7 @@ final class DriveSyncService {
                     folderID: folder.effectiveID,
                     resourceKey: folder.effectiveResourceKey,
                     path: "\(path) / \(folder.name)",
-                    visitedFolders: &visitedFolders, documents: &documents
+                    visitedFolders: &visitedFolders, documents: &documents, folderPaths: &folderPaths
                 )
             )
         }
