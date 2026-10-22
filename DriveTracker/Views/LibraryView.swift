@@ -1370,7 +1370,7 @@ struct VideoPreviewView: View {
                         }
 
                         if video.uploadText.isEmpty {
-                            Text("No caption attached to this Drive file. Add a title, caption, and hashtags from the Mac dashboard or attach text in Library.")
+                            Text("No caption attached to this Drive file. Add a title, caption, and hashtags in Library.")
                                 .font(.caption)
                                 .foregroundStyle(TrackerPalette.muted)
                         } else {
