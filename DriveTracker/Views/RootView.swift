@@ -24,6 +24,8 @@ struct RootView: View {
                 RootStatusOverlay(hasConfiguredAccount: hasConfiguredAccount)
                     .allowsHitTesting(false)
             }
+            .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in state.noteInteraction() })
+            .simultaneousGesture(TapGesture().onEnded { state.noteInteraction() })
             .tint(TrackerPalette.accent)
     }
 

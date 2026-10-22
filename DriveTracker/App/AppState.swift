@@ -71,6 +71,8 @@ final class AppState: ObservableObject {
     private var isCheckingForChanges = false
     private var driveSyncTask: Task<Bool, Never>?
     private var isPerformingIdleRepair = false
+    private let driveDeltaService: DriveDeltaService
+    private var notificationRefreshTask: Task<Void, Never>?
     private let driveChangeTracker: DriveChangeTracker
     private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
     private var copyQueueSyncTaskKey: String?
@@ -87,6 +89,7 @@ final class AppState: ObservableObject {
         self.auth = auth
         self.api = api
         self.syncService = DriveSyncService(api: api)
+        self.driveDeltaService = DriveDeltaService(api: api)
         self.copyQueueService = CopyQueueService(api: api)
         self.downloads = DownloadCoordinator()
         let notifications = DownloadNotificationService(defaults: defaults)
@@ -406,15 +409,61 @@ final class AppState: ObservableObject {
             key: changesTokenKey(for: userID),
             startToken: { try await self.api.startPageToken() },
             changes: { try await self.api.listChanges(pageToken: $0) },
-            reconcile: { changes in
-                do {
-                    let folders = try await self.affectedDriveFolders(changes, userID: userID, context: context)
-                    return await self.sync(context: context, folderIDs: folders)
-                } catch { return false }
-            },
+            reconcile: { await self.applyDriveChanges($0, userID: userID, context: context) },
             isCurrentUser: { self.auth.userID == userID }
         )
     }
+
+    private func applyDriveChanges(_ changes: [DriveChange], userID: String, context: ModelContext) async -> Bool {
+        guard !isSyncing else { return false }
+        do {
+            let enabledSources = Set(try context.fetch(FetchDescriptor<DriveSource>())
+                .filter { $0.googleUserID == userID && $0.isEnabled }.map(\.id))
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+                .filter { $0.googleUserID == userID && $0.isConfigured && $0.sourceID.map { enabledSources.contains($0) } == true }
+            // Documents use their cached source IDs even when Drive omits removed file details.
+            let documentIDs = Set(accounts.compactMap(\.captionDocumentID))
+            let documentChanges = changes.filter {
+                $0.file?.effectiveMimeType == "application/vnd.google-apps.document" ||
+                $0.fileId.map { documentIDs.contains($0) } == true
+            }
+            let result = try await driveDeltaService.apply(changes, userID: userID, accounts: accounts, context: context)
+            if !documentChanges.isEmpty {
+                let folders = try await affectedDriveFolders(documentChanges, userID: userID, context: context)
+                guard await sync(context: context, folderIDs: folders) else { return false }
+            }
+            for account in accounts where account.modelContext != nil && !account.isDeleted && result.accountsToScan.contains(account.id) {
+                guard await syncAccount(account, context: context) else { return false }
+            }
+            guard !Task.isCancelled, auth.userID == userID, !isSyncing else { return false }
+            for account in accounts where account.modelContext != nil && !account.isDeleted && result.affectedAccountIDs.contains(account.id) {
+                try assignmentEngine.ensureAssignments(for: account, context: context)
+            }
+            if !result.affectedAccountIDs.isEmpty { scheduleAnalyticsRefresh(context: context) }
+            if result.changed {
+                setSyncDate()
+                scheduleBackup(context: context)
+                notificationRefreshTask?.cancel()
+                notificationRefreshTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self else { return }
+                    await self.scheduleDownloadNotifications(context: context)
+                }
+            }
+            return true
+        } catch {
+            if !isCancellation(error) { errorMessage = error.localizedDescription }
+            return false
+        }
+    }
+
+    @discardableResult
+    func syncAccount(_ account: TikTokAccount, context: ModelContext) async -> Bool {
+        guard account.modelContext != nil, !account.isDeleted, auth.userID == account.googleUserID else { return false }
+        return await sync(context: context, folderIDs: [account.driveFolderID])
+    }
+
+    func noteInteraction() {}
 
     /// Only changed folder trees are scanned during foreground use.
     func startDriveChangeMonitor(context: ModelContext) {
@@ -1900,6 +1949,7 @@ final class AppState: ObservableObject {
             account: account,
             context: context
         )
+        driveDeltaService.record(result, account: account)
         defaults.set(Array(result.folderIDs), forKey: "DriveTracker.folderMembers.\(account.googleUserID).\(account.driveFolderID)")
         if source.lastSyncedAt.map({ Date.now.timeIntervalSince($0) >= 300 }) ?? true {
             source.lastSyncedAt = .now

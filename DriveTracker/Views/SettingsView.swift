@@ -20,25 +20,20 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    googleSection
-                    driveSection
-                    legacyClipboardArchiveSection
-                    notificationSection
-                    backupSection
-                    privacySection
-                    dangerSection
-                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(TrackerPalette.muted)
-                        .accessibilityIdentifier("app-build-version")
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 96)
+            List {
+                Section { googleSection }
+                Section { driveSection }
+                Section { legacyClipboardArchiveSection }
+                Section { notificationSection }
+                Section { backupSection }
+                Section { privacySection }
+                Section { dangerSection }
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—")")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("app-build-version")
             }
-            .trackerScreen()
+            .listStyle(.insetGrouped)
+            .trackerListStyle()
             .navigationTitle("Settings")
             .onAppear {
                 folderLink = state.rootLink
@@ -109,16 +104,13 @@ struct SettingsView: View {
                         .font(.headline)
                         .foregroundStyle(TrackerPalette.textPrimary)
                     Text("Read-only text preserved from the retired Global Copy Queue")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                         .multilineTextAlignment(.leading)
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(TrackerPalette.muted)
             }
-            .trackerCard(padding: 16)
+            .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
     }
@@ -146,7 +138,7 @@ struct SettingsView: View {
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(TrackerPalette.textPrimary)
                         Text("Google Drive & Sheets Authorized")
-                            .font(.caption2)
+                            .font(.caption)
                             .foregroundStyle(TrackerPalette.muted)
                     }
 
@@ -209,14 +201,14 @@ struct SettingsView: View {
 
             if !auth.isConfigured {
                 Label(
-                    "Tap Sign In to see the OAuth configuration error. Add the real iOS client ID locally to enable Google sign-in.",
+                    "Google sign-in is unavailable in this build. Install the configured app to connect your account.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.footnote)
                 .foregroundStyle(TrackerPalette.warning)
             }
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var driveSection: some View {
@@ -342,7 +334,7 @@ struct SettingsView: View {
             if let lastSyncAt = state.lastSyncAt {
                 HStack {
                     Text("Last complete sync:")
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                     Spacer()
                     Text(lastSyncAt.formatted())
@@ -351,7 +343,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var notificationSection: some View {
@@ -403,7 +395,7 @@ struct SettingsView: View {
                         .foregroundStyle(TrackerPalette.textPrimary)
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
                 .padding(12)
@@ -412,10 +404,10 @@ struct SettingsView: View {
             .buttonStyle(TrackerPressButtonStyle())
 
             Text("Reminders trigger at 3:00 AM, 9:00 AM, 3:00 PM, and 9:00 PM in the selected time zone, staggered per account.")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(TrackerPalette.muted)
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var backupSection: some View {
@@ -476,10 +468,10 @@ struct SettingsView: View {
             }
 
             Text("Back up your tracked accounts and download history to your Google Drive AppData vault, or restore your previous state anytime.")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(TrackerPalette.muted)
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var privacySection: some View {
@@ -497,7 +489,7 @@ struct SettingsView: View {
                         .foregroundStyle(TrackerPalette.textPrimary)
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.caption2)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
                 .padding(12)
@@ -525,7 +517,7 @@ struct SettingsView: View {
                     .foregroundStyle(TrackerPalette.textPrimary)
             }
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var dangerSection: some View {
@@ -551,10 +543,10 @@ struct SettingsView: View {
             .buttonStyle(TrackerPressButtonStyle())
 
             Text("Deletes local history on this iPhone. Your files on Google Drive will never be modified or deleted.")
-                .font(.caption2)
+                .font(.caption)
                 .foregroundStyle(TrackerPalette.muted)
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 }
 
@@ -570,7 +562,7 @@ private struct DriveSourceSettingsRow: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(TrackerPalette.textPrimary)
                     Text(source.googleEmail)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
                 Spacer()
@@ -580,13 +572,12 @@ private struct DriveSourceSettingsRow: View {
                         try? context.save()
                     }
             }
-            Text(source.rootFolderID)
-                .font(.caption2.monospaced())
-                .foregroundStyle(TrackerPalette.muted)
-                .lineLimit(1)
+            if let url = URL(string: source.rootLink) {
+                Link("Open folder in Drive", destination: url).font(.subheadline)
+            }
             if let lastSyncedAt = source.lastSyncedAt {
                 Text("Last synced \(lastSyncedAt.formatted())")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(TrackerPalette.muted)
             }
         }
@@ -597,48 +588,47 @@ private struct DriveSourceSettingsRow: View {
 
 private struct PrivacyView: View {
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
+        List {
+            Group {
                 VStack(alignment: .leading, spacing: 10) {
                     TrackerSectionLabel(title: "On this iPhone")
                     Text("Video status, daily assignments, account settings, copy-queue text, and audit history are stored in the app’s private SwiftData container.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
-                .trackerCard(padding: 16)
+                .padding(.vertical, 6)
 
                 VStack(alignment: .leading, spacing: 10) {
                     TrackerSectionLabel(title: "Google Drive")
                     Text("Social Media Video Tracker reads selected folder metadata, video files, and the Copy Paste/Queue Sheet. The hidden JSON recovery backup includes tracker metadata and cached copy-queue text, but never video files or credentials.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
-                .trackerCard(padding: 16)
+                .padding(.vertical, 6)
 
                 VStack(alignment: .leading, spacing: 10) {
                     TrackerSectionLabel(title: "Apple Photos")
                     Text("A downloaded video is added to an account-specific Photos album. The app records completion only after Photos confirms the save.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                     Text("Before saving, Social Media Video Tracker verifies the downloaded file size and Google Drive checksum when available. The Drive download is the original source file, with no app compression or quality conversion.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
-                .trackerCard(padding: 16)
+                .padding(.vertical, 6)
 
                 VStack(alignment: .leading, spacing: 10) {
                     TrackerSectionLabel(title: "Completion rule")
                     Text("A successful download and Photos save marks the item completed automatically. Suggested items are not marked completed until verified.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(TrackerPalette.muted)
                 }
-                .trackerCard(padding: 16)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 96)
+            .listRowBackground(TrackerPalette.surface)
         }
-        .trackerScreen()
+        .listStyle(.insetGrouped)
+        .trackerListStyle()
         .navigationTitle("Your data")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)

@@ -25,8 +25,8 @@ struct AnalyticsView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 16) {
+            List {
+                Group {
                     dailyTrackerCard
                     overviewGrid
                     trendCard
@@ -35,11 +35,10 @@ struct AnalyticsView: View {
                     copyQueueInsights
                     recentActivity
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 96)
+                .listRowBackground(TrackerPalette.surface)
             }
-            .trackerScreen()
+            .listStyle(.insetGrouped)
+            .trackerListStyle()
             .navigationTitle("Analytics")
             .refreshable {
                 state.scheduleAnalyticsRefresh(context: context)
@@ -90,7 +89,7 @@ struct AnalyticsView: View {
             .font(.caption.monospacedDigit().weight(.semibold))
             .foregroundStyle(TrackerPalette.muted)
         }
-        .trackerCard()
+        .padding(.vertical, 6)
         .overlay(alignment: .top) {
             Rectangle()
                 .fill(
@@ -192,7 +191,7 @@ struct AnalyticsView: View {
                 )
             }
         }
-        .trackerCard()
+        .padding(.vertical, 6)
     }
 
     private var accountBreakdown: some View {
@@ -206,7 +205,7 @@ struct AnalyticsView: View {
                 Text("No accounts are configured.")
                     .font(.subheadline)
                     .foregroundStyle(TrackerPalette.muted)
-                    .trackerCard()
+                    .padding(.vertical, 6)
             } else {
                 ForEach(snapshot.accounts) { metric in
                     NavigationLink {
@@ -265,7 +264,7 @@ struct AnalyticsView: View {
                     : TrackerPalette.muted
             )
         }
-        .trackerCard()
+        .padding(.vertical, 6)
     }
 
     private var copyQueueInsights: some View {
@@ -298,7 +297,7 @@ struct AnalyticsView: View {
                 .font(.caption)
                 .foregroundStyle(TrackerPalette.muted)
         }
-        .trackerCard()
+        .padding(.vertical, 6)
     }
 
     private var recentActivity: some View {
@@ -315,7 +314,7 @@ struct AnalyticsView: View {
                     description: Text("Downloaded videos will appear here automatically.")
                 )
                 .foregroundStyle(TrackerPalette.muted)
-                .trackerCard()
+                .padding(.vertical, 6)
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(snapshot.recentDownloads.enumerated()), id: \.element.id) {
@@ -515,7 +514,7 @@ private struct AccountAnalyticsDetailView: View {
                         tint: TrackerPalette.success
                     )
                 }
-                .trackerCard()
+                .padding(.vertical, 6)
 
                 VStack(alignment: .leading, spacing: 12) {
                     TrackerSectionLabel(title: "30-day trend")
@@ -551,7 +550,7 @@ private struct AccountAnalyticsDetailView: View {
                     }
                     .frame(height: 180)
                 }
-                .trackerCard()
+                .padding(.vertical, 6)
 
                 VStack(alignment: .leading, spacing: 0) {
                     TrackerSectionLabel(

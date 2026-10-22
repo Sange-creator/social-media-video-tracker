@@ -54,7 +54,7 @@ enum MediaTypeFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-private struct AccountLibraryView: View {
+struct AccountLibraryView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
@@ -98,10 +98,6 @@ private struct AccountLibraryView: View {
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2)
-    }
-
     var body: some View {
         let videos = filteredVideos
         List {
@@ -133,11 +129,14 @@ private struct AccountLibraryView: View {
                     .foregroundStyle(TrackerPalette.muted)
                     .padding(.top, 44)
                 } else if isGridView {
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(videos) { video in
-                            LibraryVideoPosterCard(video: video, downloads: state.downloads) {
-                                previewVideo = video
+                    let count = dynamicTypeSize.isAccessibilitySize ? 1 : 2
+                    ForEach(Array(stride(from: 0, to: videos.count, by: count)), id: \.self) { start in
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(Array(videos[start..<min(start + count, videos.count)])) { video in
+                                LibraryVideoPosterCard(video: video, downloads: state.downloads) { previewVideo = video }
+                                    .frame(maxWidth: .infinity)
                             }
+                            if count == 2 && start + 1 == videos.count { Color.clear.frame(maxWidth: .infinity) }
                         }
                     }
                 } else {
@@ -148,9 +147,8 @@ private struct AccountLibraryView: View {
                     }
                 }
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .trackerScreen()
+        .listStyle(.insetGrouped)
+        .trackerListStyle()
         .navigationTitle(account.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, prompt: "Search videos or subfolders")
@@ -159,7 +157,7 @@ private struct AccountLibraryView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    Task { await state.sync(context: context, announce: false, folderIDs: [account.driveFolderID]) }
+                    Task { await state.syncAccount(account, context: context) }
                 } label: {
                     if state.isWorking || state.isSyncing {
                         ProgressView()
@@ -178,15 +176,9 @@ private struct AccountLibraryView: View {
             VideoPreviewView(video: video)
         }
         .refreshable {
-            await state.sync(context: context, announce: false, folderIDs: [account.driveFolderID])
+            await state.syncAccount(account, context: context)
         }
-        .task {
-            ThumbnailService.shared.prefetchThumbnails(
-                for: account.videos,
-                api: state.api,
-                currentUserID: state.auth.userID
-            )
-        }
+
     }
 
     private var accountHeroCard: some View {
@@ -239,7 +231,7 @@ private struct AccountLibraryView: View {
                 )
             }
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var filterBar: some View {
@@ -319,7 +311,7 @@ private struct LibraryVideoPosterCard: View {
                 VideoThumbnailView(
                     video: video,
                     width: nil,
-                    height: 220,
+                    height: 160,
                     cornerRadius: 14
                 )
                 .frame(maxWidth: .infinity)
@@ -345,26 +337,13 @@ private struct LibraryVideoPosterCard: View {
                 }
                 .padding(8)
 
-                // Bottom Content Scrim Overlay
-                VStack(alignment: .leading, spacing: 4) {
-                    Spacer()
-                    Text(video.name)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-
-                    if !video.folderPath.isEmpty {
-                        Text(video.folderPath)
-                            .font(.caption)
-                            .foregroundStyle(TrackerPalette.muted)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: preview)
+            Text((video.name as NSString).deletingPathExtension.replacingOccurrences(of: "_", with: " "))
+                .font(.caption).lineLimit(2)
+                .foregroundStyle(TrackerPalette.textPrimary)
+                .padding(.horizontal, 8).padding(.vertical, 6)
 
             if isSaving {
                 Text("100% downloaded • Saving to Photos…")
@@ -399,7 +378,7 @@ private struct LibraryVideoPosterCard: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(isSaving ? TrackerPalette.accent : (isDownloading ? TrackerPalette.warning : Color.white))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 32)
+                        .frame(minHeight: 44)
                         .background(isSaving ? TrackerPalette.raised : (isDownloading ? TrackerPalette.surface : TrackerPalette.accent))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
@@ -429,7 +408,7 @@ private struct LibraryVideoPosterCard: View {
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(isSaving ? TrackerPalette.accent : (isDownloading ? TrackerPalette.warning : TrackerPalette.accent))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 32)
+                        .frame(minHeight: 44)
                         .background(isDownloading ? TrackerPalette.surface : TrackerPalette.raised)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .overlay {
@@ -471,175 +450,29 @@ private struct LibraryVideoListCard: View {
     let video: VideoAsset
     @ObservedObject var downloads: DownloadCoordinator
     let preview: () -> Void
-    @State private var confirmRedownload = false
-
-    private var isDownloading: Bool {
-        state.isDownloading(video)
-    }
-
-    private var isSaving: Bool {
-        state.isSavingToPhotos(video)
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
+        HStack(alignment: .center, spacing: 12) {
             Button(action: preview) {
-                HStack(spacing: 12) {
-                    VideoThumbnailView(
-                        video: video,
-                        width: 82,
-                        height: 110,
-                        cornerRadius: 10
-                    )
-
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(video.name)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(TrackerPalette.textPrimary)
-                            .lineLimit(2)
-
-                        HStack(spacing: 6) {
-                            StatusPill(status: video.status)
-                            Label(video.isPhoto ? "Photo" : "Video", systemImage: video.isPhoto ? "photo" : "video")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(TrackerPalette.muted)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(TrackerPalette.raised)
-                                .clipShape(Capsule())
-                        }
-
-                        if !video.folderPath.isEmpty {
-                            Label(video.folderPath, systemImage: "folder")
-                                .font(.caption2)
-                                .foregroundStyle(TrackerPalette.muted)
-                                .lineLimit(2)
-                        }
-                    }
-
-                    Spacer(minLength: 6)
-
-                    VStack(spacing: 9) {
-                        if video.isMissingFromDrive {
-                            Image(systemName: "icloud.slash")
-                                .foregroundStyle(TrackerPalette.danger)
-                        }
-                        if video.isMissingFromPhotos {
-                            Image(systemName: "photo.badge.exclamationmark")
-                                .foregroundStyle(TrackerPalette.warning)
-                        }
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                VideoThumbnailView(video: video, width: 56, height: 72, cornerRadius: 8)
+                    .overlay { Image(systemName: video.isPhoto ? "photo" : "play.fill").font(.caption).foregroundStyle(.white) }
             }
-            .buttonStyle(TrackerPressButtonStyle())
+            .buttonStyle(.plain)
+            .accessibilityLabel("Preview \(video.name)")
             .disabled(video.isMissingFromDrive)
-
-            if isSaving {
-                VStack(spacing: 6) {
-                    Text("100% downloaded • Saving to Photos…")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(TrackerPalette.accent)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    ProgressView()
-                        .tint(TrackerPalette.accent)
+            NavigationLink {
+                VideoDetailView(video: video)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text((video.name as NSString).deletingPathExtension.replacingOccurrences(of: "_", with: " "))
+                        .font(.body).lineLimit(2)
+                    Text(video.isMissingFromDrive ? "Missing from Drive" : video.status.title.capitalized)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-            } else if isDownloading {
-                MediaTransferProgress(identity: video.identityKey, downloads: downloads)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
             }
-
-            Divider().overlay(TrackerPalette.line)
-
-            HStack(spacing: 0) {
-                Button {
-                    if isSaving {
-                        // saving in progress
-                    } else if isDownloading {
-                        state.cancelDownload(video)
-                    } else if video.status == .downloaded || video.status == .uploaded {
-                        confirmRedownload = true
-                    } else {
-                        state.startParallelDownload(video, context: context)
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        if isSaving {
-                            ProgressView()
-                                .tint(TrackerPalette.accent)
-                            Text("100% downloaded • Saving to Photos…")
-                        } else if isDownloading {
-                            ProgressView()
-                                .tint(TrackerPalette.warning)
-                            Text("Cancel")
-                        } else {
-                            Image(
-                                systemName: (video.status == .downloaded || video.status == .uploaded)
-                                    ? "arrow.clockwise"
-                                    : "arrow.down.to.line"
-                            )
-                            Text(
-                                (video.status == .downloaded || video.status == .uploaded) ? "Download Again" : "Download"
-                            )
-                        }
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(
-                        isSaving
-                            ? TrackerPalette.accent
-                            : (isDownloading
-                                ? TrackerPalette.warning
-                                : TrackerPalette.accent)
-                    )
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 46)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(TrackerPressButtonStyle())
-                .disabled(
-                    isSaving ||
-                    (!isDownloading && (video.isMissingFromDrive || !video.canDownload))
-                )
-
-                Divider()
-                    .overlay(TrackerPalette.line)
-                    .frame(height: 24)
-
-                NavigationLink {
-                    VideoDetailView(video: video)
-                } label: {
-                    Label("Details", systemImage: "info.circle")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(TrackerPalette.muted)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(TrackerPressButtonStyle())
-            }
+            TodayDownloadControl(video: video, downloads: downloads)
         }
-        .confirmationDialog(
-            "Do you want to download again?",
-            isPresented: $confirmRedownload
-        ) {
-            Button("Download Again") {
-                state.startParallelRedownload(video, context: context)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Another copy of \(video.name) will be saved to Photos.")
-        }
-        .background(TrackerPalette.surface)
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(TrackerPalette.line, lineWidth: 0.5)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.vertical, 4)
     }
 }
 
@@ -658,16 +491,16 @@ struct VideoDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
+        List {
+            Group {
                 videoCard
                 uploadTextCard
                 historyCard
             }
-            .padding(16)
-            .padding(.bottom, 24)
+            .listRowBackground(TrackerPalette.surface)
         }
-        .trackerScreen()
+        .listStyle(.insetGrouped)
+        .trackerListStyle()
         .navigationTitle(video.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(TrackerPalette.canvas, for: .navigationBar)
@@ -769,7 +602,7 @@ struct VideoDetailView: View {
                 .foregroundStyle(TrackerPalette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     private var videoCard: some View {
@@ -793,7 +626,7 @@ struct VideoDetailView: View {
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: "info.circle")
                     .foregroundStyle(TrackerPalette.muted)
-                Text("Tap the poster frame to stream a real-time preview directly from Drive.")
+                Text("Tap the thumbnail to preview.")
                     .font(.caption)
                     .foregroundStyle(TrackerPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -867,7 +700,7 @@ struct VideoDetailView: View {
                 .buttonStyle(TrackerActionButtonStyle(kind: .primary))
             actionButtons
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
@@ -1045,7 +878,7 @@ struct VideoDetailView: View {
                 }
             }
         }
-        .trackerCard(padding: 16)
+        .padding(.vertical, 6)
     }
 }
 

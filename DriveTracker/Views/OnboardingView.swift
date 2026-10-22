@@ -21,7 +21,6 @@ struct OnboardingView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    masthead
                     setupProgress
 
                     if !auth.isConfigured {
@@ -52,7 +51,7 @@ struct OnboardingView: View {
                 .padding(.bottom, 48)
             }
             .trackerScreen()
-            .toolbar(.hidden, for: .navigationBar)
+            .navigationTitle("Get started")
             .sheet(isPresented: $showAddAccount) {
                 AddAccountFlowView(initialFolder: pendingFolder, initialLink: pendingFolderLink) {
                     pendingFolder = nil
@@ -133,35 +132,6 @@ struct OnboardingView: View {
         try? context.save()
     }
     #endif
-
-    private var masthead: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "arrow.down.to.line.compact")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(TrackerPalette.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-
-                Text("Social Media Video Tracker")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-
-            Text("Set up your tracker")
-                .font(.title.weight(.bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("Connect Google Drive, choose your folders, and set a daily target for each account.")
-                .font(.body)
-                .foregroundStyle(TrackerPalette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
 
     private var setupProgress: some View {
         VStack(spacing: 8) {
