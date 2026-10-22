@@ -5,6 +5,7 @@ struct DriveSyncResult: Equatable {
     let accountsFound: Int
     let videosFound: Int
     let newVideos: Int
+    var folderPaths: [String: String] = [:]
 }
 
 @MainActor
@@ -78,13 +79,14 @@ final class DriveSyncService {
         var hasPersistentChanges = false
 
         var visitedFolders = Set<String>()
+        var folderPaths: [String: String] = [:]
         // Keep a visited set because shared Drive folder structures can expose
         // the same folder more than once; recursion must never loop forever.
         let locatedVideos = try await recursivelyListVideos(
             folderID: root.folderID,
             resourceKey: root.resourceKey,
             path: account.folderName,
-            visitedFolders: &visitedFolders
+            visitedFolders: &visitedFolders, folderPaths: &folderPaths
         )
 
         try Task.checkCancellation()
@@ -198,7 +200,8 @@ final class DriveSyncService {
         return DriveSyncResult(
             accountsFound: 1,
             videosFound: locatedVideos.count,
-            newVideos: newVideos
+            newVideos: newVideos,
+            folderPaths: folderPaths
         )
     }
 
@@ -211,9 +214,11 @@ final class DriveSyncService {
         folderID: String,
         resourceKey: String?,
         path: String,
-        visitedFolders: inout Set<String>
+        visitedFolders: inout Set<String>,
+        folderPaths: inout [String: String]
     ) async throws -> [LocatedVideo] {
         guard visitedFolders.insert(folderID).inserted else { return [] }
+        folderPaths[folderID] = path
         let children = try await api.listChildren(of: folderID, folderResourceKey: resourceKey)
         var videos = children.filter(\.isMedia).map {
             LocatedVideo(item: $0, folderPath: path)
@@ -224,7 +229,7 @@ final class DriveSyncService {
                     folderID: folder.effectiveID,
                     resourceKey: folder.effectiveResourceKey,
                     path: "\(path) / \(folder.name)",
-                    visitedFolders: &visitedFolders
+                    visitedFolders: &visitedFolders, folderPaths: &folderPaths
                 )
             )
         }

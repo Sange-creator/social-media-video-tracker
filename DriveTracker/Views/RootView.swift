@@ -56,6 +56,8 @@ struct RootView: View {
                 guard !Task.isCancelled, state.statusMessage == message else { return }
                 state.statusMessage = nil
             }
+            .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in state.noteInteraction() })
+            .simultaneousGesture(TapGesture().onEnded { state.noteInteraction() })
             .tint(TrackerPalette.accent)
     }
 

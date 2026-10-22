@@ -32,50 +32,6 @@ nonisolated enum TrackerPalette {
     }
 }
 
-struct RadialQuotaProgress: View {
-    let completed: Int
-    let quota: Int
-    var size: CGFloat = 58
-    var lineWidth: CGFloat = 5.5
-    var showLabel: Bool = true
-
-    private var progress: Double {
-        guard quota > 0 else { return 0 }
-        return min(1.0, Double(completed) / Double(quota))
-    }
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(TrackerPalette.line, lineWidth: lineWidth)
-
-            Circle()
-                .trim(from: 0, to: CGFloat(progress))
-                .stroke(
-                    LinearGradient(
-                        colors: [TrackerPalette.accent, TrackerPalette.success],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-
-            if showLabel {
-                VStack(spacing: 0) {
-                    Text("\(completed)")
-                        .font(.system(size: size * 0.32, weight: .bold, design: .rounded))
-                        .foregroundStyle(TrackerPalette.textPrimary)
-                    Text("/\(quota)")
-                        .font(.system(size: size * 0.18, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(TrackerPalette.muted)
-                }
-            }
-        }
-        .frame(width: size, height: size)
-    }
-}
-
 struct StatusPill: View {
     let status: VideoStatus
 
@@ -151,10 +107,10 @@ struct TrackerMetric: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(value)
-                .font(.system(.title3, design: .rounded).monospacedDigit().weight(.bold))
+                .font(.title3.monospacedDigit().weight(.semibold))
                 .foregroundStyle(tint)
             Text(label)
-                .font(.caption2.weight(.medium))
+                .font(.caption)
                 .foregroundStyle(TrackerPalette.muted)
         }
     }
@@ -248,6 +204,7 @@ extension View {
     func trackerListStyle() -> some View {
         scrollContentBackground(.hidden)
             .background(TrackerPalette.canvas)
+            .listRowBackground(TrackerPalette.surface)
     }
 }
 

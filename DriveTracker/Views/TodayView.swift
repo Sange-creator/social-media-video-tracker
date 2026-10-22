@@ -17,55 +17,174 @@ struct TodayView: View {
     }
 }
 
-// The feed only depends on persisted records. Progress, toasts, and network
-// activity are observed by their individual controls rather than this list.
+// Recycle one compact account row at a time. Each carousel creates only its
+// visible preview cards; download progress stays inside individual controls.
 private struct TodayFeed: View {
+    @Environment(\.modelContext) private var context
     @Query(sort: \TikTokAccount.sortOrder) private var accounts: [TikTokAccount]
     @Query private var media: [VideoAsset]
+    @State private var editMode: EditMode = .inactive
+    @State private var orderError: String?
 
     var body: some View {
         let groups = TodayFeedIndex.build(accounts: accounts, media: media)
         List {
-            if groups.isEmpty {
-                ContentUnavailableView("No active accounts", systemImage: "folder",
-                    description: Text("Add or resume an account to see today's videos."))
-            } else {
-                Section {
-                    TodaySummary(completed: groups.reduce(0) { $0 + $1.completed },
-                                 quota: groups.reduce(0) { $0 + $1.account.dailyQuota })
+            Section {
+                TodaySummary(completed: groups.reduce(0) { $0 + $1.completed },
+                             quota: groups.reduce(0) { $0 + $1.account.dailyQuota }, compact: true)
+            }
+            Section {
+                if groups.isEmpty {
+                    ContentUnavailableView("No active accounts", systemImage: "folder",
+                        description: Text("Add or resume an account to see today's videos."))
                 }
                 ForEach(groups) { group in
-                    Section {
-                        NavigationLink {
-                            TodayAccountDetailView(account: group.account)
-                        } label: {
-                            HStack(spacing: 12) {
-                                AccountIdentityIcon(symbol: group.account.iconSymbol, colorHex: group.account.iconColorHex, size: 36)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(group.account.displayName).font(.headline)
-                                    Text("\(group.completed) of \(group.account.dailyQuota) completed" +
-                                         (group.photoCount > 0 ? " · \(group.photoCount) photos" : ""))
-                                        .font(.subheadline).foregroundStyle(.secondary)
+                    TodayAccountCard(group: group)
+                        .contextMenu {
+                            Button("Move to top", systemImage: "arrow.up.to.line") {
+                                if let index = groups.firstIndex(where: { $0.id == group.id }) {
+                                    move(IndexSet(integer: index), to: 0, groups: groups)
                                 }
                             }
-                            .padding(.vertical, 4)
                         }
-                        ForEach(group.videos) { video in
-                            TodayMediaRow(video: video)
-                        }
-                        if group.videos.isEmpty {
-                            Text("No videos queued. Open the account to choose media.")
-                                .font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        TodayAccountActions(account: group.account, hasPending: group.videos.contains { $0.status == .assigned || $0.status == .available })
-                    }
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12))
                 }
+                .onMove { move($0, to: $1, groups: groups) }
+            } header: {
+                Text(editMode.isEditing ? "Drag an account to change its order" : "Accounts")
             }
         }
         .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(TrackerPalette.canvas)
-        .contentMargins(.vertical, 8)
+        .trackerListStyle()
+        .environment(\.editMode, $editMode)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(editMode.isEditing ? "Done" : "Reorder") {
+                    withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                }
+                .disabled(groups.count < 2)
+                .accessibilityHint("Show drag handles to reorder account sections")
+            }
+        }
+        .alert("Couldn't save account order", isPresented: Binding(
+            get: { orderError != nil }, set: { if !$0 { orderError = nil } }
+        )) { Button("OK") { orderError = nil } } message: { Text(orderError ?? "") }
+    }
+
+    private func move(_ offsets: IndexSet, to destination: Int, groups: [TodayFeedGroup]) {
+        do { try HomeAccountOrdering.move(accounts: accounts, visibleIDs: groups.map(\.id),
+                                         from: offsets, to: destination, context: context) }
+        catch { orderError = error.localizedDescription }
+    }
+}
+
+private struct TodayAccountCard: View {
+    let group: TodayFeedGroup
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            NavigationLink {
+                TodayAccountDetailView(account: group.account)
+            } label: {
+                HStack(alignment: .top, spacing: 10) {
+                    AccountIdentityIcon(symbol: group.account.iconSymbol, colorHex: group.account.iconColorHex, size: 32)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(group.account.displayName).font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("\(group.completed) of \(group.account.dailyQuota) completed" +
+                             (group.photoCount > 0 ? " · \(group.photoCount) photos" : ""))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            TodayVideoCarousel(group: group)
+            TodayAccountActions(account: group.account,
+                hasPending: group.videos.contains { $0.status == .assigned || $0.status == .available })
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+struct TodayCarouselLayout {
+    static func cardWidth(available: CGFloat, accessibility: Bool) -> CGFloat {
+        accessibility ? max(180, available * 0.8) : max(76, (available - 16) / 3)
+    }
+}
+
+private struct TodayVideoCarousel: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let group: TodayFeedGroup
+    var body: some View {
+        GeometryReader { geometry in
+            let width = TodayCarouselLayout.cardWidth(available: geometry.size.width,
+                                                       accessibility: typeSize.isAccessibilitySize)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: 8) {
+                    ForEach(group.videos) { video in TodayPreviewCard(video: video, width: width) }
+                    ForEach(0..<max(0, group.account.dailyQuota - group.videos.count), id: \.self) { index in
+                        NavigationLink {
+                            TodayAccountDetailView(account: group.account)
+                        } label: {
+                            VStack(spacing: 8) {
+                                RoundedRectangle(cornerRadius: 8).fill(TrackerPalette.raised)
+                                    .overlay { Image(systemName: "plus").font(.title2).foregroundStyle(.secondary) }
+                                    .frame(height: 102)
+                                Text("Choose video").font(.caption).foregroundStyle(.secondary)
+                                    .frame(height: 32)
+                            }.frame(width: width)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Choose video for empty slot \(group.videos.count + index + 1)")
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.viewAligned)
+        }
+        .frame(height: typeSize.isAccessibilitySize ? 285 : (group.videos.isEmpty ? 145 : 220))
+    }
+}
+
+private struct TodayPreviewCard: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let video: VideoAsset
+    let width: CGFloat
+    @State private var showPreview = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Button { showPreview = true } label: {
+                VideoThumbnailView(video: video, width: width, height: 102, cornerRadius: 8)
+                    .overlay {
+                        Image(systemName: "play.fill").font(.body)
+                            .foregroundStyle(.white).padding(9)
+                            .background(.black.opacity(0.4), in: Circle())
+                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(video.isMissingFromDrive)
+            .accessibilityLabel("Preview \(video.name)")
+            Text((video.name as NSString).deletingPathExtension.replacingOccurrences(of: "_", with: " "))
+                .font(.caption).lineLimit(2).frame(height: typeSize.isAccessibilitySize ? 70 : 32, alignment: .topLeading)
+                .accessibilityLabel(video.name)
+            Text(video.status.title.capitalized).font(.caption2)
+                .foregroundStyle(video.status == .uploaded ? TrackerPalette.success : .secondary)
+                .lineLimit(1)
+            HStack(spacing: 0) {
+                TodayDownloadControl(video: video, downloads: state.downloads)
+                Spacer(minLength: 0)
+                Menu { TodayMediaActions(video: video) } label: {
+                    Image(systemName: "ellipsis").frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .accessibilityLabel("Actions for \(video.name)")
+            }
+        }
+        .frame(width: width, alignment: .leading)
+        .sheet(isPresented: $showPreview) { VideoPreviewView(video: video) }
     }
 }
 
@@ -111,6 +230,7 @@ enum TodayFeedIndex {
 private struct TodaySummary: View {
     let completed: Int
     let quota: Int
+    var compact = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -119,7 +239,7 @@ private struct TodaySummary: View {
                 Text("\(completed) / \(quota)").font(.subheadline.monospacedDigit().weight(.semibold))
             }
             Text(completed >= quota ? "You're caught up" : "\(max(0, quota - completed)) videos remaining")
-                .font(.title2.weight(.semibold))
+                .font(compact ? .subheadline.weight(.medium) : .title2.weight(.semibold))
             ProgressView(value: Double(min(completed, quota)), total: Double(max(1, quota)))
                 .tint(TrackerPalette.accent)
         }
@@ -148,8 +268,10 @@ private struct TodayAccountActions: View {
     @EnvironmentObject private var state: AppState
     let account: TikTokAccount
     let hasPending: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
-        HStack {
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout())
+        layout {
             if hasPending {
                 Button("Download all", systemImage: "arrow.down.to.line") {
                     state.downloadAllAssigned(for: account, context: context)
@@ -221,7 +343,7 @@ private struct TodayMediaActions: View {
     }
 }
 
-private struct TodayDownloadControl: View {
+struct TodayDownloadControl: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     @ObservedObject var downloads: DownloadCoordinator
@@ -253,7 +375,7 @@ private struct TodayDownloadControl: View {
     }
 }
 
-private struct TodayAccountDetailView: View {
+struct TodayAccountDetailView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var state: AppState
     let account: TikTokAccount
@@ -302,7 +424,7 @@ private struct TodayAccountDetailView: View {
         .background(TrackerPalette.canvas)
         .navigationTitle(account.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await state.sync(context: context) }
+        .refreshable { await state.syncAccount(account, context: context) }
         .sheet(isPresented: $showManualPicker) { ManualVideoPickerView(account: account) }
     }
 }

@@ -73,6 +73,9 @@ final class AppState: ObservableObject {
     private var driveSyncTask: Task<Bool, Never>?
     private var driveSyncRequestedWhileRunning = false
     private let driveChangeTracker: DriveChangeTracker
+    private let driveDeltaService: DriveDeltaService
+    private var lastInteractionAt = Date.now
+    private var notificationRefreshTask: Task<Void, Never>?
     private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
     private var copyQueueSyncTaskKey: String?
     private var copyQueueSyncTaskToken: UUID?
@@ -88,6 +91,7 @@ final class AppState: ObservableObject {
         self.auth = auth
         self.api = api
         self.syncService = DriveSyncService(api: api)
+        self.driveDeltaService = DriveDeltaService(api: api)
         self.copyQueueService = CopyQueueService(api: api)
         self.downloads = DownloadCoordinator()
         let notifications = DownloadNotificationService(defaults: defaults)
@@ -405,43 +409,106 @@ final class AppState: ObservableObject {
     }
 
     /// Poll Drive changes and reconcile when additions, edits, or removals are reported.
-    func checkForDriveChanges(context: ModelContext) async {
-        guard auth.isSignedIn, let userID = auth.userID, !isCheckingForChanges else { return }
+    @discardableResult
+    func checkForDriveChanges(context: ModelContext) async -> Bool {
+        guard auth.isSignedIn, let userID = auth.userID, !isCheckingForChanges, !isSyncing else { return false }
         isCheckingForChanges = true
         defer { isCheckingForChanges = false }
 
         let sources = (try? context.fetch(FetchDescriptor<DriveSource>()))?
             .filter { $0.googleUserID == userID && $0.isEnabled } ?? []
-        guard !sources.isEmpty else { return }
+        guard !sources.isEmpty else { return true }
 
-        await driveChangeTracker.check(
+        return await driveChangeTracker.check(
             key: changesTokenKey(for: userID),
             startToken: { try await self.api.startPageToken() },
             changes: { try await self.api.listChanges(pageToken: $0) },
             reconcile: { await self.sync(context: context) },
-            isCurrentUser: { self.auth.userID == userID }
+            isCurrentUser: { self.auth.userID == userID },
+            apply: { await self.applyDriveChanges($0, userID: userID, context: context) }
         )
     }
 
-    /// Foreground monitor for lightweight Drive change checks. A full
-    /// reconciliation is retained as a slow repair path rather than repeating
-    /// every few seconds while the user scrolls.
-    func startDriveChangeMonitor(context: ModelContext) {
-        changesMonitoringTask?.cancel()
-        changesMonitoringTask = Task(priority: .utility) { [weak self] in
-            var checkCount = 0
-            while !Task.isCancelled {
-                guard !Task.isCancelled, let self else { return }
-                checkCount += 1
-                await self.checkForDriveChanges(context: context)
-                // Repair missed notifications without constantly walking every
-                // nested folder. Normal changes trigger their own immediate sync.
-                if checkCount % 60 == 0 {
-                    await self.sync(context: context, announce: false)
+    private func applyDriveChanges(_ changes: [DriveChange], userID: String, context: ModelContext) async -> Bool {
+        guard !isSyncing else { return false }
+        do {
+            let enabledSources = Set(try context.fetch(FetchDescriptor<DriveSource>())
+                .filter { $0.googleUserID == userID && $0.isEnabled }.map(\.id))
+            let accounts = try context.fetch(FetchDescriptor<TikTokAccount>())
+                .filter { $0.googleUserID == userID && $0.isConfigured && $0.sourceID.map { enabledSources.contains($0) } == true }
+            let result = try await driveDeltaService.apply(changes, userID: userID, accounts: accounts, context: context)
+            for account in accounts where account.modelContext != nil && !account.isDeleted && result.accountsToScan.contains(account.id) {
+                guard await syncAccount(account, context: context) else { return false }
+            }
+            guard !Task.isCancelled, auth.userID == userID, !isSyncing else { return false }
+            for account in accounts where account.modelContext != nil && !account.isDeleted && result.affectedAccountIDs.contains(account.id) {
+                try assignmentEngine.ensureAssignments(for: account, context: context)
+            }
+            if !result.affectedAccountIDs.isEmpty { scheduleAnalyticsRefresh(context: context) }
+            if result.changed {
+                setSyncDate()
+                scheduleBackup(context: context)
+                notificationRefreshTask?.cancel()
+                notificationRefreshTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self else { return }
+                    await self.scheduleDownloadNotifications(context: context)
                 }
-                await self.syncWorkspaceMedia(context: context)
-                do { try await Task.sleep(for: .seconds(5)) }
-                catch { return }
+            }
+            return true
+        } catch {
+            if !isCancellation(error) { errorMessage = error.localizedDescription }
+            return false
+        }
+    }
+
+    @discardableResult
+    func syncAccount(_ account: TikTokAccount, context: ModelContext) async -> Bool {
+        guard let userID = auth.userID, userID == account.googleUserID,
+              account.modelContext != nil, !account.isDeleted, let sourceID = account.sourceID else { return false }
+        do {
+            let sources = try context.fetch(FetchDescriptor<DriveSource>())
+            guard let source = sources.first(where: { $0.id == sourceID && $0.googleUserID == userID && $0.isEnabled }) else { return false }
+            let reference = DriveFolderReference(folderID: account.driveFolderID, resourceKey: account.folderResourceKey)
+            let result = try await syncSource(source, account: account, reference: reference, context: context)
+            guard auth.userID == userID, !Task.isCancelled else { return false }
+            try assignmentEngine.ensureAssignments(for: account, context: context)
+            scheduleAnalyticsRefresh(context: context)
+            if result.newVideos > 0 { scheduleBackup(context: context) }
+            setSyncDate()
+            return true
+        } catch {
+            if !isCancellation(error) { errorMessage = error.localizedDescription }
+            return false
+        }
+    }
+
+    func noteInteraction() { lastInteractionAt = .now }
+
+    /// Check only the Drive change cursor in the foreground. Full repair runs
+    /// at most twice per activation, after ten minutes and only while idle.
+    func startDriveChangeMonitor(context: ModelContext) {
+        guard changesMonitoringTask == nil else { return }
+        changesMonitoringTask = Task(priority: .utility) { [weak self] in
+            let started = Date.now
+            var idleRepairs = 0
+            var lastWorkspaceCheck = Date.distantPast
+            var failures = 0
+            while !Task.isCancelled {
+                guard let self else { return }
+                let succeeded = await self.checkForDriveChanges(context: context)
+                failures = succeeded ? 0 : min(failures + 1, 5)
+                let now = Date.now
+                if idleRepairs < 2, now.timeIntervalSince(started) >= Double(idleRepairs + 1) * 600,
+                   now.timeIntervalSince(self.lastInteractionAt) > 20, self.downloads.progressByIdentity.isEmpty {
+                    idleRepairs += 1
+                    await self.sync(context: context)
+                }
+                if now.timeIntervalSince(lastWorkspaceCheck) >= 60 {
+                    lastWorkspaceCheck = now
+                    await self.syncWorkspaceMedia(context: context)
+                }
+                do { try await Task.sleep(for: .seconds(min(pow(2.0, Double(failures)), 30))) } catch { return }
             }
         }
     }
@@ -1818,6 +1885,7 @@ final class AppState: ObservableObject {
             account: account,
             context: context
         )
+        driveDeltaService.record(result, account: account)
         if source.lastSyncedAt.map({ Date.now.timeIntervalSince($0) >= 300 }) ?? true {
             source.lastSyncedAt = .now
             try context.save()

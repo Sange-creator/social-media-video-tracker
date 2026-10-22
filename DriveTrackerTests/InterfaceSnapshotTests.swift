@@ -108,6 +108,90 @@ final class InterfaceSnapshotTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
             window.isHidden = true
+            window.rootViewController = nil
         }
     }
+    func testThemeAcrossTabsEditorsAndAccountDetails() async throws {
+        let schema = ModelContainerFactory.schema
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        let account = TikTokAccount(googleUserID: "qa", driveFolderID: "folder", folderName: "Animated News", displayName: "Animated News")
+        context.insert(account)
+        let video = VideoAsset(driveFileID: "qa-theme", accountFolderID: "folder", googleUserID: "qa", name: "Five mistakes episode 1.mp4", mimeType: "video/mp4", account: account)
+        context.insert(video); try context.save()
+        let state = AppState(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let views: [(String, AnyView)] = [
+            ("tabs", AnyView(MainTabView())),
+            ("clipboard", AnyView(CopyQueueScreen())),
+            ("library", AnyView(LibraryView())),
+            ("accounts", AnyView(AccountsView())),
+            ("analytics", AnyView(AnalyticsView())),
+            ("settings", AnyView(SettingsView())),
+            ("account-editor", AnyView(NavigationStack { AccountEditorView(account: account) })),
+            ("account-library", AnyView(NavigationStack { AccountLibraryView(account: account) })),
+            ("video-detail", AnyView(NavigationStack { VideoDetailView(video: video) })),
+            ("today-detail", AnyView(NavigationStack { TodayAccountDetailView(account: account) })),
+            ("setup", AnyView(OnboardingView())),
+            ("add-account", AnyView(AddAccountFlowView()))
+        ]
+        for (name, screen) in views {
+            let view = screen.modelContainer(container).environmentObject(state).environmentObject(state.auth)
+                .preferredColorScheme(.dark)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+            window.rootViewController = UIHostingController(rootView: view)
+            window.makeKeyAndVisible()
+            try await Task.sleep(for: .milliseconds(200))
+            var rendered = false
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                rendered = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            XCTAssertTrue(rendered, "The \(name) screen must render")
+            let attachment = XCTAttachment(image: image); attachment.name = "theme-" + name
+            attachment.lifetime = .keepAlways; add(attachment)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+    }
+
+    func testTwentyAccountsSurviveRepeatedVerticalAndHorizontalScrolling() async throws {
+        let schema = ModelContainerFactory.schema
+        let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        for index in 0..<20 {
+            let account = TikTokAccount(googleUserID: "qa", driveFolderID: "folder-\(index)", folderName: "Creator \(index)", dailyQuota: 5, sortOrder: index)
+            context.insert(account)
+            for slot in 1...5 {
+                let video = VideoAsset(driveFileID: "\(index)-\(slot)", accountFolderID: account.driveFolderID, googleUserID: "qa", name: "Video \(slot).mp4", mimeType: "video/mp4", account: account)
+                context.insert(video)
+                context.insert(DailyAssignment(localDayKey: DayKey.value(for: .now), slot: slot, account: account, video: video))
+            }
+        }
+        try context.save()
+        let state = AppState(defaults: UserDefaults(suiteName: UUID().uuidString)!)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = UIHostingController(rootView: TodayView().modelContainer(container).environmentObject(state).environmentObject(state.auth))
+        window.makeKeyAndVisible(); defer { window.isHidden = true; window.rootViewController = nil }
+        try await Task.sleep(for: .milliseconds(300))
+        func scrollViews(_ view: UIView) -> [UIScrollView] {
+            ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews($0) }
+        }
+        let vertical = try XCTUnwrap(scrollViews(window).max { $0.contentSize.height < $1.contentSize.height })
+        XCTAssertGreaterThan(vertical.contentSize.height, vertical.bounds.height * 2)
+        for step in 0..<24 {
+            let end = max(0, vertical.contentSize.height - vertical.bounds.height)
+            vertical.setContentOffset(CGPoint(x: 0, y: end * CGFloat(step % 13) / 12), animated: false)
+            vertical.layoutIfNeeded()
+            for horizontal in scrollViews(window) where horizontal.contentSize.width > horizontal.bounds.width && horizontal.contentSize.height <= horizontal.bounds.height + 1 {
+                horizontal.setContentOffset(CGPoint(x: max(0, horizontal.contentSize.width - horizontal.bounds.width), y: 0), animated: false)
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<TikTokAccount>()), 20)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<VideoAsset>()), 100)
+    }
+
 }

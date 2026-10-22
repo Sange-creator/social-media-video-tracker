@@ -23,6 +23,7 @@ struct DriveItem: Decodable, Identifiable, Sendable {
     let thumbnailLink: String?
     let resourceKey: String?
     var description: String? = nil
+    var trashed: Bool? = nil
     let capabilities: DriveCapabilities?
     let shortcutDetails: DriveShortcutDetails?
 
@@ -688,6 +689,6 @@ final class DriveAPIClient {
     }
 
     private static let fields =
-        "id,name,mimeType,parents,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey,description," +
+        "id,name,mimeType,parents,size,md5Checksum,modifiedTime,thumbnailLink,resourceKey,description,trashed," +
         "capabilities(canDownload),shortcutDetails(targetId,targetMimeType,targetResourceKey)"
 }
