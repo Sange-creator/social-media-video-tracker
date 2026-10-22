@@ -2,6 +2,15 @@
 
 All notable changes to Social Media Video Tracker are documented here.
 
+## Unreleased — 2026-10-02
+
+### Web dashboard removal
+
+- Removed the web dashboard project, including API routes, database migrations,
+  dependency manifests, build scripts, tests, and its QA screenshot.
+- Updated setup documentation and Library guidance to use the native app.
+- Retained the optional native workspace sync client for externally hosted APIs.
+
 ## Unreleased — 2026-08-17
 
 ### Backup and repository safety

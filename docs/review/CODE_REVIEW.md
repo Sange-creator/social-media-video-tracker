@@ -1,5 +1,7 @@
 # Code review and reliability fixes — 1 October 2026
 
+**Historical review:** The web dashboard, backend source, database migrations, and dashboard QA capture were removed from this repository on 2 October 2026. Dashboard findings and deployment requirements below describe the earlier checkout and no longer apply to this repository.
+
 The subsequent UI and scrolling overhaul is documented in [UI_SCROLL_REVIEW.md](UI_SCROLL_REVIEW.md).
 
 This review covers the native SwiftUI/SwiftData app, its Drive and workspace synchronization, media playback and thumbnail lifecycle, daily assignments, and the Next.js dashboard/API/database. Changes are implemented in this checkout. The backend changes have not been deployed. Following the [physical-device crash investigation on 2 October](CRASH_FOLLOWUP.md), native build 39 was installed on both iPhones; that follow-up records the newer 63-test result, crash evidence, and launch checks.
@@ -37,7 +39,7 @@ This review covers the native SwiftUI/SwiftData app, its Drive and workspace syn
 
 Final result: **58 native tests passed, 22 dashboard tests passed**, no failures. Type checking, lint, and production build passed. Browser checks confirmed automatic discovery, draft preservation, and denied-save behavior.
 
-Synthetic UI captures: [Today light](today-light.png), [Today dark](today-dark.png), [Today accessibility text](today-large-text.png), [Dashboard automatic refresh and save failure](dashboard-qa.png).
+Synthetic UI captures: [Today light](today-light.png), [Today dark](today-dark.png), [Today accessibility text](today-large-text.png).
 
 ## Release requirements
 

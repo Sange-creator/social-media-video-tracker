@@ -24,7 +24,7 @@ The app connects only to the Drive folders you select. Each folder can be associ
 4. Let the app create a daily set of unused suggestions, or choose a different unused video manually.
 5. Tap a video to stream a preview directly from Drive.
 6. Download the original file to Photos. The tracker marks it completed only after the save succeeds.
-7. Attach one complete title, caption, and hashtag block to each Drive file in the hosted dashboard, then copy it from that file on iPhone.
+7. Attach one complete title, caption, and hashtag block to each video in Library, then copy it from that file on iPhone.
 8. Review daily, per-account, and all-time activity in Analytics.
 
 Suggestions that are not completed can carry forward. Completed videos remain in history and are excluded from future suggestions, even when a Drive filename changes.
@@ -76,7 +76,7 @@ Suggestions that are not completed can carry forward. Completed videos remain in
 - Preserves line breaks, commas, quotation marks, emojis, hashtags, and Unicode.
 - Keeps the text attached when a Drive file is renamed or moved.
 - Provides Save and Copy text beside the matching video's download controls.
-- Synchronizes configured workspaces through the hosted dashboard and cloud API.
+- Supports optional synchronization with an externally hosted workspace API.
 - Preserves text from the retired Google Sheet queue in a read-only Settings archive.
 
 ### Analytics
@@ -277,16 +277,17 @@ A free Apple Personal Team can install the app on a personal iPhone, but the pro
 
 Repeat the connection process when another folder belongs to a different Google account.
 
-## Connected dashboard setup
+## Optional workspace synchronization
 
-The `dashboard/` project provides the computer workflow. Configure its
-Supabase and Google OAuth environment values, deploy it to Cloudflare, and add
-the resulting URLs and public Supabase values to `DriveTracker/Info.plist`.
-Select a Drive destination, choose a video or photo, paste the complete upload
-paragraph once, and upload. The iPhone app matches the text by Drive file ID.
+The web dashboard and its backend source have been removed from this repository.
+The iPhone app works locally with Google Drive without a workspace backend.
+Its workspace sync client remains available for an externally hosted compatible
+API, configured with `WorkspaceAPIBaseURL`, `SupabaseURL`, and
+`SupabaseAnonKey` in `DriveTracker/Info.plist`.
 
-Existing entries from the retired Google Sheet queue remain available as a
-read-only Clipboard Archive in Settings.
+Add and copy per-file upload text directly in Library. Existing entries from
+the retired Google Sheet queue remain available as a read-only Clipboard
+Archive in Settings.
 
 ## Tests
 

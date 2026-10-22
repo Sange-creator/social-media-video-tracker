@@ -155,6 +155,7 @@ final class DriveDeltaService {
             do { folder = try await api.item(id: folderID, resourceKey: nil) }
             catch DriveAPIError.notFound { continue }
             catch DriveAPIError.forbidden { continue }
+            catch DriveAPIError.http(let code, _) where code == 403 || code == 404 { continue }
             guard api.currentUserID == userID else { throw GoogleAuthError.notSignedIn }
             if let ancestor = try await owner(of: folder.parents ?? [], userID: userID, accounts: accounts, visited: next) {
                 let found = Owner(accountID: ancestor.accountID, path: ancestor.path + " / " + folder.name)

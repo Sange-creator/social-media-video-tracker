@@ -59,7 +59,7 @@ final class DriveDeltaTests: XCTestCase {
             reconcile: { changes in
                 do { _ = try await service.apply(changes, userID: "qa", accounts: accounts, context: context); return true }
                 catch { return false }
-            })
+            }, isCurrentUser: { true })
         XCTAssertFalse(succeeded)
         XCTAssertEqual(defaults.string(forKey: "cursor"), "before")
         XCTAssertEqual(try context.fetch(FetchDescriptor<VideoAsset>()).count, 0)
