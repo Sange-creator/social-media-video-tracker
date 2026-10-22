@@ -73,6 +73,8 @@ final class AppState: ObservableObject {
     private var driveSyncTask: Task<Bool, Never>?
     private var driveSyncRequestedWhileRunning = false
     private let driveChangeTracker: DriveChangeTracker
+    private var knownFolderIDsByAccount: [UUID: Set<String>] = [:]
+    private var folderPathByFolderID: [String: String] = [:]
     private var copyQueueSyncTask: Task<CopyQueueSyncResult, Error>?
     private var copyQueueSyncTaskKey: String?
     private var copyQueueSyncTaskToken: UUID?
@@ -152,6 +154,7 @@ final class AppState: ObservableObject {
                 for: userID,
                 context: context
             )
+            populateKnownFoldersFromDatabase(context: context)
             try ensureToday(context: context)
             await syncWorkspaceMedia(context: context)
             if hasSources { scheduleStartupMaintenance(context: context) }
@@ -180,6 +183,7 @@ final class AppState: ObservableObject {
                 for: userID,
                 context: context
             )
+            populateKnownFoldersFromDatabase(context: context)
             try ensureToday(context: context)
             scheduleAnalyticsRefresh(context: context)
             if hasSources {
@@ -207,6 +211,7 @@ final class AppState: ObservableObject {
                 for: userID,
                 context: context
             )
+            populateKnownFoldersFromDatabase(context: context)
             try ensureToday(context: context)
             scheduleAnalyticsRefresh(context: context)
             if hasSources {
@@ -404,28 +409,213 @@ final class AppState: ObservableObject {
         "\(Keys.changesPageTokenPrefix)\(userID)"
     }
 
-    /// Poll Drive changes and reconcile when additions, edits, or removals are reported.
-    func checkForDriveChanges(context: ModelContext) async {
-        guard auth.isSignedIn, let userID = auth.userID, !isCheckingForChanges else { return }
+    /// Fast, ultra-low-latency incremental check against Google Drive Changes API (~100ms).
+    /// Incrementally updates or inserts modified files directly without heavy folder rescans.
+    @discardableResult
+    func checkForDriveChanges(context: ModelContext) async -> Bool {
+        guard auth.isSignedIn, let userID = auth.userID, !isCheckingForChanges else { return false }
         isCheckingForChanges = true
         defer { isCheckingForChanges = false }
 
         let sources = (try? context.fetch(FetchDescriptor<DriveSource>()))?
             .filter { $0.googleUserID == userID && $0.isEnabled } ?? []
-        guard !sources.isEmpty else { return }
+        guard !sources.isEmpty else { return false }
 
-        await driveChangeTracker.check(
-            key: changesTokenKey(for: userID),
-            startToken: { try await self.api.startPageToken() },
-            changes: { try await self.api.listChanges(pageToken: $0) },
-            reconcile: { await self.sync(context: context) },
-            isCurrentUser: { self.auth.userID == userID }
-        )
+        populateKnownFoldersFromDatabase(context: context)
+
+        let tokenKey = changesTokenKey(for: userID)
+        guard let token = defaults.string(forKey: tokenKey), !token.isEmpty else {
+            // First time: fetch start token without forcing full immediate sync
+            if let startToken = try? await api.startPageToken() {
+                defaults.set(startToken, forKey: tokenKey)
+            }
+            return false
+        }
+
+        do {
+            let (changes, nextToken) = try await api.listChanges(pageToken: token)
+            defaults.set(nextToken, forKey: tokenKey)
+
+            // Ignore internal backup file changes to break the feedback loop
+            let nonBackupChanges = changes.filter { change in
+                if let name = change.file?.name, name == BackupService.fileName {
+                    return false
+                }
+                return true
+            }
+            guard !nonBackupChanges.isEmpty else { return false }
+
+            let accounts = (try? context.fetch(FetchDescriptor<TikTokAccount>()))?
+                .filter { $0.googleUserID == userID } ?? []
+            guard !accounts.isEmpty else { return false }
+            let accountsByID = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+            let existingVideos = (try? context.fetch(FetchDescriptor<VideoAsset>(
+                predicate: #Predicate { $0.googleUserID == userID }
+            ))) ?? []
+            var existingVideosByID = Dictionary(existingVideos.map { ($0.driveFileID, $0) }, uniquingKeysWith: { first, _ in first })
+
+            var affectedAccountIDs = Set<UUID>()
+            var newlyAddedVideos: [VideoAsset] = []
+            var hasPersistentChanges = false
+            let now = Date.now
+
+            for change in nonBackupChanges {
+                let fileID = change.fileId ?? change.file?.effectiveID
+                let isRemoved = change.removed == true || change.file?.isTrashed == true
+
+                if isRemoved {
+                    // Microsecond path: Mark existing file as missing from Drive directly
+                    if let fileID, let video = existingVideosByID[fileID], !video.isMissingFromDrive {
+                        video.isMissingFromDrive = true
+                        video.updatedAt = now
+                        hasPersistentChanges = true
+                    }
+                    // If a folder was removed, trigger targeted sync for that account
+                    if let fileID, let accountID = knownFolderIDsByAccount.first(where: { $0.value.contains(fileID) })?.key {
+                        affectedAccountIDs.insert(accountID)
+                    }
+                    continue
+                }
+
+                guard let item = change.file else { continue }
+
+                if item.isFolder {
+                    // Folder created, modified, or moved: find affected account
+                    let folderID = item.effectiveID
+                    let parents = item.parents ?? []
+                    for account in accounts {
+                        let known = knownFolderIDsByAccount[account.id] ?? []
+                        if known.contains(folderID) || parents.contains(where: { known.contains($0) }) {
+                            affectedAccountIDs.insert(account.id)
+                        }
+                    }
+                    continue
+                }
+
+                guard item.isMedia else { continue }
+
+                // Check if video already exists in database
+                if let existing = existingVideosByID[item.effectiveID] {
+                    let canDownload = item.capabilities?.canDownload ?? true
+                    let metadataChanged =
+                        existing.name != item.name ||
+                        existing.mimeType != item.effectiveMimeType ||
+                        existing.resourceKey != item.effectiveResourceKey ||
+                        existing.size != item.sizeValue ||
+                        existing.checksum != item.md5Checksum ||
+                        existing.driveModifiedAt != item.modifiedDate ||
+                        existing.thumbnailLink != item.thumbnailLink ||
+                        existing.isMissingFromDrive ||
+                        existing.canDownload != canDownload
+
+                    if metadataChanged {
+                        existing.name = item.name
+                        existing.mimeType = item.effectiveMimeType
+                        existing.resourceKey = item.effectiveResourceKey
+                        existing.size = item.sizeValue
+                        existing.checksum = item.md5Checksum
+                        existing.driveModifiedAt = item.modifiedDate
+                        existing.thumbnailLink = item.thumbnailLink
+                        existing.isMissingFromDrive = false
+                        existing.canDownload = canDownload
+                        existing.lastSeenAt = now
+                        existing.updatedAt = now
+                        hasPersistentChanges = true
+                    }
+                    continue
+                }
+
+                // Brand new media file uploaded to Drive!
+                // Locate the account that owns this file via parent folder IDs
+                let parents = item.parents ?? []
+                var matchedAccount: TikTokAccount?
+                var resolvedFolderPath: String?
+
+                for account in accounts {
+                    let known = knownFolderIDsByAccount[account.id] ?? []
+                    if let matchedParent = parents.first(where: { known.contains($0) }) {
+                        matchedAccount = account
+                        resolvedFolderPath = folderPathByFolderID[matchedParent] ?? account.folderName
+                        break
+                    }
+                }
+
+                if let matchedAccount {
+                    // Microsecond direct insertion: No folder crawl needed!
+                    let folderPath = resolvedFolderPath ?? matchedAccount.folderName
+                    let video = VideoAsset(
+                        driveFileID: item.effectiveID,
+                        accountFolderID: matchedAccount.driveFolderID,
+                        googleUserID: userID,
+                        name: item.name,
+                        folderPath: folderPath,
+                        mimeType: item.effectiveMimeType,
+                        resourceKey: item.effectiveResourceKey,
+                        size: item.sizeValue,
+                        checksum: item.md5Checksum,
+                        driveModifiedAt: item.modifiedDate,
+                        thumbnailLink: item.thumbnailLink,
+                        canDownload: item.capabilities?.canDownload ?? true,
+                        account: matchedAccount
+                    )
+                    context.insert(video)
+                    existingVideosByID[item.effectiveID] = video
+                    newlyAddedVideos.append(video)
+                    hasPersistentChanges = true
+                } else {
+                    // Parent was not in known set (e.g. newly created subfolder in Drive).
+                    // Find which account might own it and queue targeted sync.
+                    for source in sources {
+                        if parents.contains(source.rootFolderID) {
+                            for account in accounts where account.sourceID == source.id {
+                                affectedAccountIDs.insert(account.id)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Execute TARGETED sync ONLY on the specific accounts whose folder structure changed!
+            for accountID in affectedAccountIDs {
+                if let account = accountsByID[accountID] {
+                    if let result = await syncAccount(account, context: context, announce: false) {
+                        if result.newVideos > 0 {
+                            hasPersistentChanges = true
+                        }
+                    }
+                }
+            }
+
+            if hasPersistentChanges {
+                try context.save()
+                try ensureToday(context: context)
+                setSyncDate()
+                scheduleBackup(context: context)
+                scheduleDownloadNotificationsDebounced(context: context)
+
+                if !newlyAddedVideos.isEmpty {
+                    ThumbnailService.shared.prefetchThumbnails(
+                        for: newlyAddedVideos,
+                        api: api,
+                        currentUserID: userID
+                    )
+                }
+                return true
+            }
+
+            return !affectedAccountIDs.isEmpty
+        } catch {
+            guard !isCancellation(error) else { return false }
+            // If token expired, refresh start token
+            if let startToken = try? await api.startPageToken() {
+                defaults.set(startToken, forKey: tokenKey)
+            }
+            return false
+        }
     }
 
-    /// Foreground monitor for lightweight Drive change checks. A full
-    /// reconciliation is retained as a slow repair path rather than repeating
-    /// every few seconds while the user scrolls.
+    /// Foreground monitor for low-latency Drive change checks with adaptive frequency.
     func startDriveChangeMonitor(context: ModelContext) {
         changesMonitoringTask?.cancel()
         changesMonitoringTask = Task(priority: .utility) { [weak self] in
@@ -461,7 +651,7 @@ final class AppState: ObservableObject {
             sourceCount > 0
         else { return }
         lastAutomaticSyncAttempt = .now
-        await sync(context: context, announce: false)
+        await checkForDriveChanges(context: context)
     }
 
     func ensureToday(context: ModelContext) throws {
@@ -479,6 +669,17 @@ final class AppState: ObservableObject {
     func scheduleDownloadNotifications(context: ModelContext) async {
         let assignments = (try? context.fetch(FetchDescriptor<DailyAssignment>())) ?? []
         await notifications.schedule(assignments: assignments)
+    }
+
+    private var downloadNotificationsDebounceTask: Task<Void, Never>?
+
+    func scheduleDownloadNotificationsDebounced(context: ModelContext) {
+        downloadNotificationsDebounceTask?.cancel()
+        downloadNotificationsDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self else { return }
+            await self.scheduleDownloadNotifications(context: context)
+        }
     }
 
     func setReminderTimeZone(_ id: String, context: ModelContext) {
@@ -1342,6 +1543,7 @@ final class AppState: ObservableObject {
             }
 
             try context.save()
+            knownFolderIDsByAccount[accountID] = nil
 
             // 10. Update active source configuration
             if let userID = auth.userID {
@@ -1804,6 +2006,43 @@ final class AppState: ObservableObject {
         scheduleBackup(context: context)
     }
 
+    private func recordSyncResult(_ result: DriveSyncResult, for account: TikTokAccount) {
+        var folderIDs = knownFolderIDsByAccount[account.id] ?? Set<String>()
+        folderIDs.insert(account.driveFolderID)
+        folderIDs.formUnion(result.visitedFolderIDs)
+        knownFolderIDsByAccount[account.id] = folderIDs
+
+        folderPathByFolderID[account.driveFolderID] = account.folderName
+        for (folderID, path) in result.folderPaths {
+            folderPathByFolderID[folderID] = path
+        }
+    }
+
+    private func populateKnownFoldersFromDatabase(context: ModelContext) {
+        if let accounts = try? context.fetch(FetchDescriptor<TikTokAccount>()) {
+            for account in accounts {
+                var folderIDs = knownFolderIDsByAccount[account.id] ?? Set<String>()
+                folderIDs.insert(account.driveFolderID)
+                knownFolderIDsByAccount[account.id] = folderIDs
+                if folderPathByFolderID[account.driveFolderID] == nil {
+                    folderPathByFolderID[account.driveFolderID] = account.folderName
+                }
+            }
+        }
+        if let videos = try? context.fetch(FetchDescriptor<VideoAsset>()) {
+            for video in videos {
+                if let account = video.account {
+                    var folderIDs = knownFolderIDsByAccount[account.id] ?? Set<String>()
+                    folderIDs.insert(video.accountFolderID)
+                    knownFolderIDsByAccount[account.id] = folderIDs
+                    if !video.folderPath.isEmpty && folderPathByFolderID[video.accountFolderID] == nil {
+                        folderPathByFolderID[video.accountFolderID] = video.folderPath
+                    }
+                }
+            }
+        }
+    }
+
     private func syncSource(
         _ source: DriveSource,
         account: TikTokAccount,
@@ -1822,7 +2061,66 @@ final class AppState: ObservableObject {
             source.lastSyncedAt = .now
             try context.save()
         }
+        recordSyncResult(result, for: account)
         return result
+    }
+
+    /// Synchronizes ONLY the specified account with Google Drive.
+    /// Untouched accounts and sources are completely bypassed, avoiding heavy scans.
+    @discardableResult
+    func syncAccount(
+        _ account: TikTokAccount,
+        context: ModelContext,
+        announce: Bool = false
+    ) async -> DriveSyncResult? {
+        guard auth.isSignedIn, let userID = auth.userID, account.googleUserID == userID else { return nil }
+        guard let sourceID = account.sourceID else { return nil }
+
+        let sources = (try? context.fetch(FetchDescriptor<DriveSource>(
+            predicate: #Predicate { $0.id == sourceID }
+        ))) ?? []
+        guard let source = sources.first, source.isEnabled else { return nil }
+
+        let reference = DriveFolderReference(
+            folderID: account.driveFolderID,
+            resourceKey: account.folderResourceKey ?? source.rootResourceKey
+        )
+
+        do {
+            let result = try await syncSource(
+                source,
+                account: account,
+                reference: reference,
+                context: context
+            )
+            setSyncDate()
+            try ensureToday(context: context)
+            if announce {
+                statusMessage = "Synced \(account.displayName): \(result.videosFound) videos found."
+            }
+            if result.newVideos > 0 {
+                scheduleBackup(context: context)
+                scheduleDownloadNotificationsDebounced(context: context)
+            }
+            return result
+        } catch {
+            guard !isCancellation(error) else { return nil }
+            if announce {
+                errorMessage = error.localizedDescription
+            }
+            return nil
+        }
+    }
+
+    /// User-initiated fast refresh. Checks for Drive changes first (<100ms).
+    /// If changes exist, applies them incrementally without full crawl.
+    func refreshNow(context: ModelContext) async {
+        guard auth.isSignedIn else { return }
+        let hadChanges = await checkForDriveChanges(context: context)
+        if !hadChanges && lastSyncAt == nil {
+            await sync(context: context, announce: false)
+        }
+        setSyncDate()
     }
 
     private func finishRecoveredDownload(

@@ -12,7 +12,7 @@ struct TodayView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { TodaySyncButton() }
                 }
-                .refreshable { await state.sync(context: context) }
+                .refreshable { await state.refreshNow(context: context) }
         }
     }
 }
@@ -302,7 +302,7 @@ private struct TodayAccountDetailView: View {
         .background(TrackerPalette.canvas)
         .navigationTitle(account.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await state.sync(context: context) }
+        .refreshable { await state.syncAccount(account, context: context) }
         .sheet(isPresented: $showManualPicker) { ManualVideoPickerView(account: account) }
     }
 }

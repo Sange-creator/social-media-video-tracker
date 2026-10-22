@@ -136,15 +136,7 @@ final class CopyQueueCSVParserTests: XCTestCase {
         DriveItem(
             id: id,
             name: name,
-            mimeType: mimeType,
-            parents: nil,
-            size: nil,
-            md5Checksum: nil,
-            modifiedTime: nil,
-            thumbnailLink: nil,
-            resourceKey: nil,
-            capabilities: nil,
-            shortcutDetails: nil
+            mimeType: mimeType
         )
     }
 }
