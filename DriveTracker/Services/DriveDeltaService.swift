@@ -68,6 +68,7 @@ final class DriveDeltaService {
         }
         try Task.checkCancellation()
         guard api.currentUserID == userID else { throw GoogleAuthError.notSignedIn }
+        guard !prepared.isEmpty else { return DriveDeltaResult() }
         // Records can be deleted while ancestry requests suspend. Fetch fresh
         // models only after those requests, and guard them again after yields.
         let media = try context.fetch(FetchDescriptor<VideoAsset>(predicate: #Predicate { $0.googleUserID == userID }))

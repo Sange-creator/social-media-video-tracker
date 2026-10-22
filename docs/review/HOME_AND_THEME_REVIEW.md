@@ -1,5 +1,7 @@
 # Home, theme, and incremental sync — build 41
 
+Consolidation note (22 October 2026): the carousel and ordering UI now includes TikTok/Facebook streams and document captions. Foreground file events use incremental reconciliation; complete catch-up scans retain the newer off-time policy (at most once every 12 hours), rather than the historical per-activation repair described below.
+
 ## Home
 
 Each account is one reusable List row with a full, wrapping account name, a quota summary, and a horizontal carousel. Three thumbnail cards fit normal phone widths. Accounts with more than three videos scroll horizontally; accessibility text uses wider cards and horizontal scrolling. Tapping a thumbnail opens the streaming preview. Per-video downloads and action menus remain available, alongside Download all and Shuffle.

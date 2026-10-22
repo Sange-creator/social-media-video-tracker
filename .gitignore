@@ -19,3 +19,6 @@ DriveTracker/Info.local.plist
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# Local artifacts retained after retiring the web dashboard.
+/dashboard/

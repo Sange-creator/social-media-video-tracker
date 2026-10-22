@@ -62,6 +62,7 @@ final class InterfaceSnapshotTests: XCTestCase {
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
         let context = container.mainContext
         let account = TikTokAccount(googleUserID: "qa-user", driveFolderID: "qa-folder", folderName: "Daily Videos", displayName: "Daily Motivation", dailyQuota: 5)
+        account.uploadPlatform = .tiktok
         context.insert(account)
         for index in 1...5 {
             let video = VideoAsset(driveFileID: "qa-\(index)", accountFolderID: "qa-folder", googleUserID: "qa-user",
@@ -116,6 +117,7 @@ final class InterfaceSnapshotTests: XCTestCase {
         let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
         let context = container.mainContext
         let account = TikTokAccount(googleUserID: "qa", driveFolderID: "folder", folderName: "Animated News", displayName: "Animated News")
+        account.uploadPlatform = .tiktok
         context.insert(account)
         let video = VideoAsset(driveFileID: "qa-theme", accountFolderID: "folder", googleUserID: "qa", name: "Five mistakes episode 1.mp4", mimeType: "video/mp4", account: account)
         context.insert(video); try context.save()
@@ -161,6 +163,7 @@ final class InterfaceSnapshotTests: XCTestCase {
         let context = container.mainContext
         for index in 0..<20 {
             let account = TikTokAccount(googleUserID: "qa", driveFolderID: "folder-\(index)", folderName: "Creator \(index)", dailyQuota: 5, sortOrder: index)
+            account.uploadPlatform = .tiktok
             context.insert(account)
             for slot in 1...5 {
                 let video = VideoAsset(driveFileID: "\(index)-\(slot)", accountFolderID: account.driveFolderID, googleUserID: "qa", name: "Video \(slot).mp4", mimeType: "video/mp4", account: account)

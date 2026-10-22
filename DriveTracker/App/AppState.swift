@@ -463,8 +463,6 @@ final class AppState: ObservableObject {
         return await sync(context: context, folderIDs: [account.driveFolderID])
     }
 
-    func noteInteraction() {}
-
     /// Only changed folder trees are scanned during foreground use.
     func startDriveChangeMonitor(context: ModelContext) {
         if isPerformingIdleRepair { driveSyncTask?.cancel() }
@@ -498,7 +496,7 @@ final class AppState: ObservableObject {
             if !savedFolders.isDisjoint(with: changedIDs) { affected.insert(root) }
         }
         // Old memberships matter for deletes and moves out of a tracked folder.
-        for account in accounts where account.videos.contains(where: { changedIDs.contains($0.driveFileID) }) {
+        for account in accounts where account.captionDocumentID.map({ changedIDs.contains($0) }) == true || account.videos.contains(where: { changedIDs.contains($0.driveFileID) }) {
             affected.insert(account.driveFolderID)
         }
         var parentsByID: [String: [String]] = [:]
